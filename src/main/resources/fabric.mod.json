@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "jm_seedmap",
+	"version": "${version}",
+	"name": "SeedMap Structures",
+	"description": "Shows structures computed from the world seed on JourneyMap and Xaero's Minimap / World Map.",
+	"authors": ["per"],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["ru.per.jmseedmap.SeedMapClient"],
+		"journeymap": ["ru.per.jmseedmap.map.jm.SeedMapPlugin"],
+		"modmenu": ["ru.per.jmseedmap.ui.ModMenuIntegration"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"journeymap": "*",
+		"xaerominimap": "*",
+		"xaeroworldmap": "*"
+	}
+}
