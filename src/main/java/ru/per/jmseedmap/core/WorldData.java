@@ -134,6 +134,24 @@ public final class WorldData {
 		return changed;
 	}
 
+	/** Replaces one pin (exact match) with another, keeping its place in the list. */
+	public boolean replacePin(Pin old, Pin replacement) {
+		int i = pins.indexOf(old);
+		if (i < 0) {
+			return false;
+		}
+		pins.set(i, replacement);
+		dirty = true;
+		return true;
+	}
+
+	/** Removes exactly this pin (a normal pin or the target). */
+	public boolean removeExact(Pin pin) {
+		boolean changed = pins.remove(pin);
+		dirty |= changed;
+		return changed;
+	}
+
 	public boolean clearTarget() {
 		boolean changed = pins.removeIf(Pin::target);
 		dirty |= changed;

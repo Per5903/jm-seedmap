@@ -30,12 +30,13 @@ public final class SeedMapClient implements ClientModInitializer {
 		SeedMapConfig.load();
 		SeedMap seedMap = SeedMap.get();
 
-		// Xaero integrations only touch Xaero classes when the mod is actually there.
-		if (FabricLoader.getInstance().isModLoaded("xaerominimap")) {
-			seedMap.addBackend(new ru.per.jmseedmap.map.xaero.XaeroMinimapBackend());
+		// Xaero integrations only touch Xaero classes when the mod is actually there. A Xaero version with a changed
+		// API must not take the game down: the integration is skipped and the rest keeps working.
+		if (FabricLoader.getInstance().isModLoaded("xaerominimap") || FabricLoader.getInstance().isModLoaded("xaerominimapfair")) {
+			addSafely(seedMap, "Xaero's Minimap", () -> new ru.per.jmseedmap.map.xaero.XaeroMinimapBackend());
 		}
 		if (FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
-			seedMap.addBackend(new ru.per.jmseedmap.map.xaero.XaeroWorldMapBackend());
+			addSafely(seedMap, "Xaero's World Map", () -> new ru.per.jmseedmap.map.xaero.XaeroWorldMapBackend());
 		}
 		// JourneyMap registers itself through the "journeymap" entrypoint (SeedMapPlugin).
 
@@ -60,10 +61,12 @@ public final class SeedMapClient implements ClientModInitializer {
 				client.gui.setScreen(new SeedMapConfigScreen(null));
 			}
 			seedMap.tick(client);
+			SelfTest.tick(client);
 		});
 
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
 			seedMap.resetStructures();
+			ru.per.jmseedmap.compat.VersionCheck.onJoin(client);
 			SelfTest.onJoin(client);
 			if (client.getSingleplayerServer() == null && SeedMapConfig.get().enabled
 				&& !SeedMapConfig.get().seeds.containsKey(GenContextProvider.serverKey())) {
@@ -73,5 +76,13 @@ public final class SeedMapClient implements ClientModInitializer {
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> seedMap.onDisconnect());
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> seedMap.shutdown());
+	}
+
+	private static void addSafely(SeedMap seedMap, String name, java.util.function.Supplier<ru.per.jmseedmap.map.MapBackend> backend) {
+		try {
+			seedMap.addBackend(backend.get());
+		} catch (Throwable t) {
+			LOGGER.error("Cannot enable the {} integration (unsupported version?); the other maps still work", name, t);
+		}
 	}
 }

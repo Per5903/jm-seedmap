@@ -25,6 +25,7 @@ import net.minecraft.world.phys.AABB;
 import org.jspecify.annotations.Nullable;
 import ru.per.jmseedmap.SeedMapClient;
 import ru.per.jmseedmap.SeedMapConfig;
+import ru.per.jmseedmap.core.BiomeLayer;
 import ru.per.jmseedmap.core.SeedMap;
 import ru.per.jmseedmap.core.SlimeChunks;
 import ru.per.jmseedmap.core.StructureStyles;
@@ -43,6 +44,10 @@ public final class JourneyMapBackend implements MapBackend {
 	private final Map<String, MarkerOverlay> shown = new HashMap<>();
 	/** Slime chunk overlays, one 32x32 image per 512x512 tile. */
 	private final Map<String, ImageOverlay> slimeShown = new HashMap<>();
+	/** Biome layer overlays and the tile each one shows. */
+	private final Map<String, ImageOverlay> biomeShown = new HashMap<>();
+	private final Map<String, BiomeLayer.Tile> biomeTiles = new HashMap<>();
+	private int biomeOpacity = -1;
 	private int ticks;
 	private int shownRevision = -1;
 	private int shownPins = -1;
@@ -65,6 +70,7 @@ public final class JourneyMapBackend implements MapBackend {
 		}
 		syncPins(seedMap);
 		syncSlime(seedMap);
+		syncBiomes(seedMap);
 		SeedMapConfig config = SeedMapConfig.get();
 		if (!config.enabled) {
 			hideAll();
@@ -202,7 +208,8 @@ public final class JourneyMapBackend implements MapBackend {
 
 	private void syncSlime(SeedMap seedMap) {
 		Map<String, SlimeTile> wanted = new HashMap<>();
-		for (Context.UI ui : new Context.UI[]{Context.UI.Fullscreen, Context.UI.Minimap}) {
+		// Fullscreen only: JourneyMap does not clip image overlays to the round minimap.
+		for (Context.UI ui : new Context.UI[]{Context.UI.Fullscreen}) {
 			UIState state = api.getUIState(ui);
 			if (state == null || !state.active || state.blockBounds == null || state.dimension == null) {
 				continue;
@@ -257,12 +264,83 @@ public final class JourneyMapBackend implements MapBackend {
 		MapImage mapImage = new MapImage(image).setBlur(false);
 		ImageOverlay overlay = new ImageOverlay(SeedMapClient.MOD_ID, new BlockPos(tx * 512, 64, tz * 512),
 			new BlockPos(tx * 512 + 512, 64, tz * 512 + 512), mapImage);
-		overlay.setDimension(tile.dimension()).setOverlayGroupName("SeedMap slime").setDisplayOrder(-100);
+		overlay.setDimension(tile.dimension()).setOverlayGroupName("SeedMap slime").setDisplayOrder(-100)
+			.setActiveUIs(Context.UI.Fullscreen, Context.UI.Webmap);
 		try {
 			api.show(overlay);
 			slimeShown.put(key, overlay);
 		} catch (Exception e) {
 			SeedMapClient.LOGGER.warn("JourneyMap refused slime overlay", e);
+			image.close();
+		}
+	}
+
+	/**
+	 * Biome colors on the fullscreen map. JourneyMap has no API for "explored or not", so the layer is drawn
+	 * translucent over everything; use the opacity setting to keep the real map readable.
+	 */
+	private void syncBiomes(SeedMap seedMap) {
+		SeedMapConfig config = SeedMapConfig.get();
+		Map<String, BiomeLayer.Tile> wanted = new HashMap<>();
+		UIState state = api.getUIState(Context.UI.Fullscreen);
+		if (config.enabled && config.showBiomes && state != null && state.active && state.blockBounds != null && state.dimension != null) {
+			AABB b = state.blockBounds;
+			int radius = ru.per.jmseedmap.core.Perf.current().biomeRadius;
+			int cx = Math.floorDiv((int) ((b.minX + b.maxX) / 2), 512);
+			int cz = Math.floorDiv((int) ((b.minZ + b.maxZ) / 2), 512);
+			int minX = Math.max(Math.floorDiv((int) b.minX, 512), cx - radius);
+			int maxX = Math.min(Math.floorDiv((int) b.maxX, 512), cx + radius);
+			int minZ = Math.max(Math.floorDiv((int) b.minZ, 512), cz - radius);
+			int maxZ = Math.min(Math.floorDiv((int) b.maxZ, 512), cz + radius);
+			for (int tx = minX; tx <= maxX; tx++) {
+				for (int tz = minZ; tz <= maxZ; tz++) {
+					BiomeLayer.Tile tile = seedMap.biomes.get(state.dimension, tx, tz);
+					if (tile != null) {
+						wanted.put(state.dimension.identifier() + "|" + tx + "," + tz, tile);
+					}
+				}
+			}
+		}
+		boolean opacityChanged = biomeOpacity != config.biomeOpacity;
+		biomeOpacity = config.biomeOpacity;
+		Iterator<Map.Entry<String, ImageOverlay>> it = biomeShown.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<String, ImageOverlay> entry = it.next();
+			BiomeLayer.Tile tile = wanted.get(entry.getKey());
+			if (tile == null || tile != biomeTiles.get(entry.getKey()) || opacityChanged) {
+				api.remove(entry.getValue());
+				biomeTiles.remove(entry.getKey());
+				it.remove();
+			}
+		}
+		ResourceKey<Level> dim = state == null ? null : state.dimension;
+		for (Map.Entry<String, BiomeLayer.Tile> entry : wanted.entrySet()) {
+			if (!biomeShown.containsKey(entry.getKey()) && dim != null) {
+				showBiomeTile(entry.getKey(), dim, entry.getValue(), config.biomeOpacity);
+			}
+		}
+	}
+
+	private void showBiomeTile(String key, ResourceKey<Level> dimension, BiomeLayer.Tile tile, int opacity) {
+		int size = tile.size();
+		int alpha = Math.clamp(opacity * 255 / 100, 0, 255) << 24;
+		NativeImage image = new NativeImage(size, size, false);
+		for (int z = 0; z < size; z++) {
+			for (int x = 0; x < size; x++) {
+				image.setPixel(x, z, alpha | (tile.colors()[z * size + x] & 0xFFFFFF));
+			}
+		}
+		int tx = tile.tileX() * 512;
+		int tz = tile.tileZ() * 512;
+		ImageOverlay overlay = new ImageOverlay(SeedMapClient.MOD_ID, new BlockPos(tx, 64, tz), new BlockPos(tx + 512, 64, tz + 512),
+			new MapImage(image).setBlur(false));
+		overlay.setDimension(dimension).setOverlayGroupName("SeedMap biomes").setDisplayOrder(-200).setActiveUIs(Context.UI.Fullscreen);
+		try {
+			api.show(overlay);
+			biomeShown.put(key, overlay);
+			biomeTiles.put(key, tile);
+		} catch (Exception e) {
+			SeedMapClient.LOGGER.warn("JourneyMap refused biome overlay", e);
 			image.close();
 		}
 	}

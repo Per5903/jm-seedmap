@@ -10,7 +10,11 @@ import ru.per.jmseedmap.core.SeedMap;
 public final class SeedMapPlugin implements IClientPlugin {
 	@Override
 	public void initialize(IClientAPI api) {
-		SeedMap.get().addBackend(new JourneyMapBackend(api));
+		try {
+			SeedMap.get().addBackend(new JourneyMapBackend(api));
+		} catch (Throwable t) {
+			SeedMapClient.LOGGER.error("Cannot enable the JourneyMap integration (unsupported version?)", t);
+		}
 	}
 
 	@Override

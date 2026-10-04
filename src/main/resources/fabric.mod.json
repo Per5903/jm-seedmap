@@ -10,7 +10,8 @@
 	"entrypoints": {
 		"client": ["ru.per.jmseedmap.SeedMapClient"],
 		"journeymap": ["ru.per.jmseedmap.map.jm.SeedMapPlugin"],
-		"modmenu": ["ru.per.jmseedmap.ui.ModMenuIntegration"]
+		"modmenu": ["ru.per.jmseedmap.ui.ModMenuIntegration"],
+		"seedcrackerx": ["ru.per.jmseedmap.compat.SeedCrackerCompat::pushWorldSeed"]
 	},
 	"depends": {
 		"fabricloader": ">=0.19.5",
@@ -21,6 +22,7 @@
 	"suggests": {
 		"journeymap": "*",
 		"xaerominimap": "*",
-		"xaeroworldmap": "*"
+		"xaeroworldmap": "*",
+		"seedcrackerx": "*"
 	}
 }

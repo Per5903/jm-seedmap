@@ -41,7 +41,7 @@ public final class StructureStyles {
 
 		public void setEnabled(boolean enabled) {
 			for (String id : ids) {
-				SeedMapConfig.get().structures.put(id, enabled);
+				StructureStyles.setEnabled(id, enabled);
 			}
 		}
 
@@ -53,6 +53,8 @@ public final class StructureStyles {
 	private static final Map<String, Style> STYLES = new HashMap<>();
 	private static final List<Group> GROUPS = new ArrayList<>();
 	private static final Map<String, Identifier> ICONS = new HashMap<>();
+	private static final Map<String, Boolean> ENABLED_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+	private static volatile int filterVersion;
 
 	static {
 		Style village = new Style("item/bell", 0xE0B530, true);
@@ -176,9 +178,31 @@ public final class StructureStyles {
 		return new java.util.TreeSet<>(STYLES.keySet());
 	}
 
+	/** Called for every marker on every frame, so the answer is cached until a toggle changes. */
 	public static boolean isEnabled(String structureId) {
+		Boolean cached = ENABLED_CACHE.get(structureId);
+		if (cached != null) {
+			return cached;
+		}
 		Boolean value = SeedMapConfig.get().structures.get(structureId);
-		return value != null ? value : style(structureId).defaultEnabled();
+		boolean enabled = value != null ? value : style(structureId).defaultEnabled();
+		ENABLED_CACHE.put(structureId, enabled);
+		return enabled;
+	}
+
+	public static void setEnabled(String structureId, boolean enabled) {
+		SeedMapConfig.get().structures.put(structureId, enabled);
+		filtersChanged();
+	}
+
+	/** Increases whenever any structure toggle changes. */
+	public static int filterVersion() {
+		return filterVersion;
+	}
+
+	public static void filtersChanged() {
+		ENABLED_CACHE.clear();
+		filterVersion++;
 	}
 
 	public static String displayName(String structureId) {

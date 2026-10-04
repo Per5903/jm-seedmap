@@ -39,6 +39,27 @@ final class SelfTest {
 	private SelfTest() {
 	}
 
+	/**
+	 * The data pack test world replaces the Overworld, so the game asks to confirm an "experimental" world.
+	 * Only in the selftest: answer "I know what I'm doing" so the run needs no clicks.
+	 */
+	private static Object confirmed;
+
+	static void tick(Minecraft mc) {
+		if (ENABLED && mc.gui.screen() instanceof net.minecraft.client.gui.screens.BackupConfirmScreen screen && screen != confirmed) {
+			confirmed = screen;
+			for (var child : screen.children()) {
+				if (child instanceof net.minecraft.client.gui.components.Button button
+					&& button.getMessage().getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents t
+					&& t.getKey().equals("selectWorld.backupJoinSkipButton")) {
+					SeedMapClient.LOGGER.info("SELFTEST confirming the experimental test world");
+					button.onPress(new net.minecraft.client.input.MouseButtonInfo(0, 0));
+					return;
+				}
+			}
+		}
+	}
+
 	static void onJoin(Minecraft mc) {
 		if (!ENABLED || started) {
 			return;
@@ -47,7 +68,7 @@ final class SelfTest {
 		Thread thread = new Thread(() -> {
 			boolean ok = false;
 			try {
-				ok = run(mc);
+				ok = Boolean.getBoolean("jm_seedmap.selftest.quick") || run(mc);
 			} catch (Throwable t) {
 				SeedMapClient.LOGGER.error("SELFTEST crashed", t);
 			}
@@ -94,6 +115,46 @@ final class SelfTest {
 				SeedMapClient.LOGGER.info("SELFTEST structure-seed finder found {} in {} ms", SeedMapConfig.get().seeds.get(serverKey),
 					seedMap.seedFinder.elapsedMillis());
 			}
+			if (found != null && net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("seedcrackerx")) {
+				// What SeedCrackerX does when it cracks a seed: call every "seedcrackerx" entrypoint.
+				SeedMapConfig.get().seeds.remove(serverKey);
+				long seed = found;
+				mc.execute(() -> {
+					try {
+						var list = (java.util.List<?>) Class.forName("kaptainwutax.seedcrackerX.SeedCracker").getField("entrypoints").get(null);
+						SeedMapClient.LOGGER.info("SELFTEST SeedCrackerX entrypoints: {}", list.size());
+						var push = Class.forName("kaptainwutax.seedcrackerX.api.SeedCrackerAPI").getMethod("pushWorldSeed", long.class);
+						for (Object entrypoint : list) {
+							push.invoke(entrypoint, seed);
+						}
+					} catch (ReflectiveOperationException e) {
+						SeedMapClient.LOGGER.error("SELFTEST cannot call SeedCrackerX entrypoints", e);
+					}
+				});
+				Thread.sleep(2_000L);
+				SeedMapClient.LOGGER.info("SELFTEST seed from SeedCrackerX entrypoint: {}", SeedMapConfig.get().seeds.get(serverKey));
+			}
+			if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("viafabricplus")) {
+				// Pretend ViaFabricPlus is set to 1.21.4 and check that the warning picks it up.
+				mc.execute(() -> {
+					try {
+						Object impl = Class.forName("com.viaversion.viafabricplus.ViaFabricPlus").getMethod("getImpl").invoke(null);
+						Class<?> pv = Class.forName("com.viaversion.viaversion.api.protocol.version.ProtocolVersion");
+						Object old = impl.getClass().getMethod("getTargetVersion").invoke(impl);
+						Object v1214 = pv.getField("v1_21_4").get(null);
+						var set = Class.forName("com.viaversion.viafabricplus.api.ViaFabricPlusBase").getMethod("setTargetVersion", pv);
+						set.invoke(impl, v1214);
+						ru.per.jmseedmap.compat.VersionCheck.onJoin(mc);
+						SeedMapClient.LOGGER.info("SELFTEST ViaFabricPlus warning: {}", ru.per.jmseedmap.compat.VersionCheck.detectedVersion());
+						set.invoke(impl, old);
+						ru.per.jmseedmap.compat.VersionCheck.onJoin(mc);
+						SeedMapClient.LOGGER.info("SELFTEST ViaFabricPlus back to native: {}", ru.per.jmseedmap.compat.VersionCheck.detectedVersion());
+					} catch (ReflectiveOperationException e) {
+						SeedMapClient.LOGGER.error("SELFTEST ViaFabricPlus check failed", e);
+					}
+				});
+				Thread.sleep(1_000L);
+			}
 			Thread.sleep(1_000L);
 			return found != null;
 		}
@@ -103,6 +164,9 @@ final class SelfTest {
 		ok &= check(server, provider, Level.OVERWORLD, LevelStem.OVERWORLD, -2, 1);
 		ok &= check(server, provider, Level.NETHER, LevelStem.NETHER, -1, 0);
 		ok &= check(server, provider, Level.END, LevelStem.END, -5, 4);
+		ok &= checkBiomes(server, Level.OVERWORLD);
+		ok &= checkBiomes(server, Level.NETHER);
+		ok &= checkVersionParsing();
 		provider.shutdown();
 		return ok;
 	}
@@ -112,7 +176,11 @@ final class SelfTest {
 	) throws Exception {
 		ServerLevel level = server.getLevel(dim);
 		GenContext sp = GenContextProvider.fromServer("selftest-sp", server, dim).orElseThrow();
-		GenContext mp = provider.fromVanilla("selftest-mp", level.getSeed(), "minecraft:normal", stem, dim).orElseThrow();
+		// A world with data packs: the seed-only path gets the same packs, as a player would copy them from the server.
+		java.nio.file.Path packs = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.DATAPACK_DIR);
+		boolean hasPacks = GenContextProvider.packFingerprint(packs).length() > 0;
+		GenContext mp = provider.fromVanilla("selftest-mp", level.getSeed(), "minecraft:normal", stem, dim,
+			hasPacks ? packs : null, hasPacks ? GenContextProvider.packFingerprint(packs) : "").orElseThrow();
 
 		long t0 = System.nanoTime();
 		Set<String> predicted = predict(sp, minTile, maxTile);
@@ -145,6 +213,69 @@ final class SelfTest {
 		SeedMapClient.LOGGER.info("SELFTEST {}: variants {}", dim.identifier(), actual.stream().filter(k -> k.contains("#")).toList());
 		SeedMapClient.LOGGER.info("SELFTEST {}: {} structures; finder sp {} ms, mp {} ms, vanilla {} ms",
 			dim.identifier(), actual.size(), (t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, (t3 - t2) / 1_000_000);
+		return ok;
+	}
+
+	/**
+	 * The biome layer samples high above the terrain; compare with the biome vanilla assigns at the actual surface
+	 * height of the same columns (computed from noise, no chunks generated).
+	 */
+	private static boolean checkBiomes(IntegratedServer server, ResourceKey<Level> dim) {
+		ServerLevel level = server.getLevel(dim);
+		GenContext ctx = GenContextProvider.fromServer("selftest-biomes", server, dim).orElseThrow();
+		var chunks = level.getChunkSource();
+		var generator = chunks.getGenerator();
+		var random = chunks.randomState();
+		int sampleY = dim.equals(Level.OVERWORLD) ? ctx.heightAccessor().getMaxY() : 64;
+		int match = 0;
+		int total = 0;
+		java.util.Map<String, Integer> mismatches = new java.util.TreeMap<>();
+		long start = System.nanoTime();
+		for (int tx = -3; tx <= 2; tx++) {
+			for (int tz = -3; tz <= 2; tz++) {
+				var tile = ru.per.jmseedmap.core.BiomeLayer.compute(ctx, tx, tz, 16, sampleY);
+				for (int i = 0; i < 24; i++) {
+					int cx = (i * 7) % 32;
+					int cz = (i * 13 + tx * 5 + tz) % 32;
+					int x = tx * 512 + cx * 16 + 8;
+					int z = tz * 512 + cz * 16 + 8;
+					int y = dim.equals(Level.OVERWORLD)
+						? generator.getBaseHeight(x, z, net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE_WG, level, random)
+						: 64;
+					var actual = generator.getBiomeSource().getNoiseBiome(net.minecraft.core.QuartPos.fromBlock(x),
+						net.minecraft.core.QuartPos.fromBlock(y), net.minecraft.core.QuartPos.fromBlock(z), random.sampler());
+					String actualId = actual.unwrapKey().map(k -> k.identifier().toString()).orElse("?");
+					String ours = tile.biomeAt(x, z).toString();
+					total++;
+					if (ours.equals(actualId)) {
+						match++;
+					} else {
+						mismatches.merge(ours + "->" + actualId, 1, Integer::sum);
+					}
+				}
+			}
+		}
+		double rate = 100.0 * match / total;
+		SeedMapClient.LOGGER.info("SELFTEST biomes {}: {}/{} columns match the surface biome ({}%), {} ms; differences {}", dim.identifier(),
+			match, total, String.format(java.util.Locale.ROOT, "%.1f", rate), (System.nanoTime() - start) / 1_000_000, mismatches);
+		return rate >= 90.0;
+	}
+
+	private static boolean checkVersionParsing() {
+		String[][] cases = {
+			{"Paper 1.21.11", "1.21.11"}, {"Velocity 3.4.0 (1.7.2-26.2)", null}, {"26.2", null}, {"26.2.1", null},
+			{"Spigot 1.21.4", "1.21.4"}, {"BungeeCord 1.8.x-26.2.x", null}, {"Purpur 26.1", "26.1"}, {"Fabric", null},
+		};
+		boolean ok = true;
+		for (String[] c : cases) {
+			String got = ru.per.jmseedmap.compat.VersionCheck.otherVersion(c[0], "26.2");
+			boolean same = java.util.Objects.equals(got, c[1]);
+			ok &= same;
+			if (!same) {
+				SeedMapClient.LOGGER.error("SELFTEST version parsing: '{}' -> {} (expected {})", c[0], got, c[1]);
+			}
+		}
+		SeedMapClient.LOGGER.info("SELFTEST version parsing: {}", ok ? "OK" : "MISMATCH");
 		return ok;
 	}
 
@@ -203,6 +334,25 @@ final class SelfTest {
 			if (Boolean.getBoolean("jm_seedmap.selftest.slime")) {
 				SeedMapConfig.get().showSlimeChunks = true;
 			}
+			if (Boolean.getBoolean("jm_seedmap.selftest.quick")) {
+				Thread.sleep(10_000L);
+				screenshot(mc, "seedmap-minimap.png");
+				mc.execute(() -> mc.player.setYRot(mc.player.getYRot() + 60));
+				Thread.sleep(2_000L);
+				screenshot(mc, "seedmap-minimap-rotated.png");
+				if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
+					SeedMapConfig.get().showBiomes = true;
+					SeedMapConfig.get().biomesOnlyUnexplored = false;
+					mc.execute(() -> openXaeroWorldMap(mc));
+					Thread.sleep(10_000L);
+					screenshot(mc, "seedmap-xaero-biomes.png");
+					SeedMapConfig.get().biomesOnlyUnexplored = true;
+					Thread.sleep(3_000L);
+					screenshot(mc, "seedmap-xaero-biomes-unexplored.png");
+				}
+				mc.execute(mc::stop);
+				return;
+			}
 			featureCheck(mc);
 			Thread.sleep(8_000L);
 			screenshot(mc, "seedmap-minimap.png");
@@ -214,7 +364,19 @@ final class SelfTest {
 				screenshot(mc, "seedmap-xaero-worldmap.png");
 				mc.execute(() -> mc.gui.setScreen(null));
 				Thread.sleep(1_000L);
+				// Biome layer everywhere, then only where the map is still empty.
+				SeedMapConfig.get().showBiomes = true;
+				SeedMapConfig.get().biomesOnlyUnexplored = false;
+				mc.execute(() -> openXaeroWorldMap(mc));
+				Thread.sleep(10_000L);
+				screenshot(mc, "seedmap-xaero-biomes.png");
+				SeedMapConfig.get().biomesOnlyUnexplored = true;
+				Thread.sleep(3_000L);
+				screenshot(mc, "seedmap-xaero-biomes-unexplored.png");
+				mc.execute(() -> mc.gui.setScreen(null));
+				Thread.sleep(1_000L);
 			}
+			SeedMapConfig.get().showBiomes = true;
 			if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("journeymap")) {
 				for (int attempt = 0; attempt < 5 && !(mc.gui.screen() != null && mc.gui.screen().getClass().getSimpleName().equals("Fullscreen")); attempt++) {
 					mc.execute(() -> {
@@ -262,6 +424,9 @@ final class SelfTest {
 			Thread.sleep(1_500L);
 			screenshot(mc, "seedmap-settings-" + tab.toLowerCase(java.util.Locale.ROOT) + ".png");
 		}
+		mc.execute(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.PinsScreen(null)));
+		Thread.sleep(1_500L);
+		screenshot(mc, "seedmap-pins.png");
 		mc.execute(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.SearchScreen(null)));
 		Thread.sleep(1_500L);
 		screenshot(mc, "seedmap-search.png");
@@ -314,6 +479,8 @@ final class SelfTest {
 						player.setGameMode(net.minecraft.world.level.GameType.CREATIVE);
 						int x = goal.pos().getX() + 20;
 						int z = goal.pos().getZ();
+						// Load the chunk first: an unloaded chunk reports the bottom of the world as its height.
+						player.level().getChunk(x >> 4, z >> 4);
 						int y = player.level().getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, x, z) + 1;
 						player.teleportTo(x + 0.5, y, z + 0.5);
 						SeedMapClient.LOGGER.info("SELFTEST teleported next to {}", goal.key());
@@ -321,10 +488,33 @@ final class SelfTest {
 					Thread.sleep(6_000L);
 					mc.execute(() -> SeedMapClient.LOGGER.info("SELFTEST {} visited after walking up: {}", goal.key(), seedMap.isVisited(goal)));
 				}
+				cacheCheck(mc, list);
 			}
 		} catch (Exception e) {
 			SeedMapClient.LOGGER.error("SELFTEST feature check failed", e);
 		}
+	}
+
+	/** Forget everything (which writes the disk cache), let it be read back and compare with what was there. */
+	private static void cacheCheck(Minecraft mc, List<FoundStructure> before) throws Exception {
+		var seedMap = ru.per.jmseedmap.core.SeedMap.get();
+		CompletableFuture<double[]> center = new CompletableFuture<>();
+		mc.execute(() -> center.complete(new double[]{mc.player.getX(), mc.player.getZ()}));
+		double[] c = center.get();
+		Set<String> keysBefore = new TreeSet<>();
+		CompletableFuture<List<FoundStructure>> now = new CompletableFuture<>();
+		mc.execute(() -> now.complete(seedMap.index.query(mc.level.dimension(), c[0] - 300, c[1] - 300, c[0] + 300, c[1] + 300)));
+		now.get().forEach(s -> keysBefore.add(s.key()));
+		mc.execute(seedMap.index::reset);
+		Thread.sleep(2_000L);
+		SeedMapClient.LOGGER.info("SELFTEST disk cache: {} KB after reset", seedMap.index.diskCacheBytes() / 1024);
+		Thread.sleep(4_000L);
+		Set<String> keysAfter = new TreeSet<>();
+		CompletableFuture<List<FoundStructure>> again = new CompletableFuture<>();
+		mc.execute(() -> again.complete(seedMap.index.query(mc.level.dimension(), c[0] - 300, c[1] - 300, c[0] + 300, c[1] + 300)));
+		again.get().forEach(s -> keysAfter.add(s.key()));
+		SeedMapClient.LOGGER.info("SELFTEST disk cache round trip: before {} structures, after {}, identical: {}", keysBefore.size(), keysAfter.size(),
+			keysBefore.equals(keysAfter));
 	}
 
 	private static void openXaeroWorldMap(Minecraft mc) {

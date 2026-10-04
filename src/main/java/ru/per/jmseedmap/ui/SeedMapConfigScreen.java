@@ -33,11 +33,13 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 
 	private static final List<Integer> RADII = List.of(0, 16, 24, 32, 48, 64, 96, 128);
 	private static final List<String> PRESETS = List.of("minecraft:normal", "minecraft:large_biomes", "minecraft:amplified");
+	private static final List<Integer> OPACITIES = List.of(20, 30, 40, 50, 60, 70, 80, 90, 100);
 	private static Tab tab = Tab.MAP;
 
 	private @Nullable EditBox seedBox;
 	private @Nullable Button checkLine;
 	private @Nullable Button finderLine;
+	private @Nullable Button packsLine;
 	private int ticks;
 
 	public SeedMapConfigScreen(@Nullable Screen parent) {
@@ -73,6 +75,7 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 	protected void addOptions() {
 		checkLine = null;
 		finderLine = null;
+		packsLine = null;
 		seedBox = null;
 		switch (tab) {
 			case MAP -> addMapTab();
@@ -91,7 +94,14 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 		list.addSmall(
 			toggle("jm_seedmap.opt.minimap", c.showOnMinimap, v -> c.showOnMinimap = v),
 			toggle("jm_seedmap.opt.worldmap", c.showOnWorldMap, v -> c.showOnWorldMap = v));
-		list.addSmall(toggle("jm_seedmap.opt.slime", c.showSlimeChunks, v -> c.showSlimeChunks = v), null);
+		list.addSmall(toggle("jm_seedmap.opt.slime", c.showSlimeChunks, v -> c.showSlimeChunks = v),
+			toggle("jm_seedmap.opt.biomes", c.showBiomes, v -> c.showBiomes = v));
+		list.addSmall(
+			withTip(toggle("jm_seedmap.opt.biomes_unexplored", c.biomesOnlyUnexplored, v -> c.biomesOnlyUnexplored = v), "jm_seedmap.opt.biomes_unexplored.tip"),
+			CycleButton.<Integer>builder(v -> Component.literal(v + "%"), c.biomeOpacity)
+				.withValues(OPACITIES.contains(c.biomeOpacity) ? OPACITIES
+					: java.util.stream.Stream.concat(OPACITIES.stream(), java.util.stream.Stream.of(c.biomeOpacity)).sorted().toList())
+				.create(Component.translatable("jm_seedmap.opt.biome_opacity"), (b, v) -> c.biomeOpacity = v));
 		list.addHeader(Component.translatable("jm_seedmap.screen.visited"));
 		list.addSmall(
 			CycleButton.<SeedMapConfig.VisitedMode>builder(
@@ -100,6 +110,34 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 				.withTooltip(v -> Tooltip.create(Component.translatable("jm_seedmap.opt.visited.tip")))
 				.create(Component.translatable("jm_seedmap.opt.visited"), (b, v) -> c.visitedMode = v),
 			radius("jm_seedmap.opt.visit_radius", c.visitRadius, v -> c.visitRadius = v));
+
+		list.addHeader(Component.translatable("jm_seedmap.screen.performance"));
+		list.addSmall(
+			CycleButton.<SeedMapConfig.Performance>builder(SeedMapConfigScreen::perfLabel, c.performance)
+				.withValues(SeedMapConfig.Performance.values())
+				.withTooltip(v -> Tooltip.create(Component.translatable("jm_seedmap.opt.perf.tip")))
+				.create(Component.translatable("jm_seedmap.opt.perf"), (b, v) -> c.performance = v),
+			withTip(toggle("jm_seedmap.opt.cache", c.diskCache, v -> c.diskCache = v), "jm_seedmap.opt.cache.tip"));
+		long cacheKb = SeedMap.get().index.diskCacheBytes() / 1024;
+		list.addSmall(Button.builder(Component.translatable("jm_seedmap.screen.cache_clear", cacheKb), b -> {
+			SeedMap.get().index.clearDiskCache();
+			b.setMessage(Component.translatable("jm_seedmap.screen.cache_clear", 0));
+			b.active = false;
+		}).build(), null);
+	}
+
+	private static Component perfLabel(SeedMapConfig.Performance p) {
+		Component name = Component.translatable("jm_seedmap.perf." + p.name().toLowerCase(Locale.ROOT));
+		if (p == SeedMapConfig.Performance.AUTO) {
+			return Component.empty().append(name).append(" (")
+				.append(Component.translatable("jm_seedmap.perf." + ru.per.jmseedmap.core.Perf.auto().name().toLowerCase(Locale.ROOT))).append(")");
+		}
+		return name;
+	}
+
+	private static <T extends net.minecraft.client.gui.components.AbstractWidget> T withTip(T widget, String key) {
+		widget.setTooltip(Tooltip.create(Component.translatable(key)));
+		return widget;
 	}
 
 	private void addStructuresTab() {
@@ -138,6 +176,9 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			toggle("jm_seedmap.opt.pins", c.showPins, v -> c.showPins = v),
 			radius("jm_seedmap.opt.arrival_radius", c.arrivalRadius, v -> c.arrivalRadius = v));
 		list.addSmall(
+			Button.builder(Component.translatable("jm_seedmap.screen.pins", SeedMap.get().pins().size()), b -> mc.gui.setScreen(new PinsScreen(this))).build(),
+			null);
+		list.addSmall(
 			Button.builder(Component.translatable("jm_seedmap.screen.search"), b -> mc.gui.setScreen(new SearchScreen(this))).build(),
 			oneShot("jm_seedmap.screen.clear_target", () -> SeedMap.get().clearTarget()));
 		list.addSmall(
@@ -149,6 +190,10 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 		SeedMapConfig c = SeedMapConfig.get();
 		Minecraft mc = Minecraft.getInstance();
 		boolean singleplayer = mc.getSingleplayerServer() != null;
+		Component versionWarning = ru.per.jmseedmap.compat.VersionCheck.warning();
+		if (versionWarning != null) {
+			list.addBig(infoLine(Component.literal("⚠ ").append(versionWarning).withStyle(ChatFormatting.GOLD), versionWarning));
+		}
 		if (singleplayer) {
 			list.addHeader(Component.translatable("jm_seedmap.screen.seed_sp"));
 		} else if (mc.level != null) {
@@ -167,7 +212,24 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 						c.presets.put(key, v);
 						SeedMap.get().resetStructures();
 					}),
-				null);
+				withTip(toggle("jm_seedmap.opt.seedcracker", c.seedCrackerAuto, v -> c.seedCrackerAuto = v), "jm_seedmap.opt.seedcracker.tip"));
+
+			list.addHeader(Component.translatable("jm_seedmap.screen.datapacks"));
+			list.addSmall(
+				Button.builder(Component.translatable("jm_seedmap.screen.datapacks_open"), b -> {
+					java.nio.file.Path dir = GenContextProvider.packDir(key);
+					try {
+						java.nio.file.Files.createDirectories(dir);
+					} catch (java.io.IOException ignored) {
+					}
+					net.minecraft.util.Util.getPlatform().openPath(dir);
+				}).tooltip(Tooltip.create(Component.translatable("jm_seedmap.datapacks.hint"))).build(),
+				Button.builder(Component.translatable("jm_seedmap.screen.datapacks_reload"), b -> {
+					SeedMap.get().resetStructures();
+					updateLines();
+				}).build());
+			packsLine = infoLine(packsStatus(), null);
+			list.addBig(packsLine);
 		}
 
 		list.addHeader(Component.translatable("jm_seedmap.screen.check"));
@@ -200,9 +262,31 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 	}
 
 	private static Button infoLine(Component text) {
+		return infoLine(text, null);
+	}
+
+	/** A disabled full-width button used as a status line; the tooltip shows long texts in full. */
+	private static Button infoLine(Component text, @Nullable Component tooltip) {
 		Button line = Button.builder(text, b -> { }).width(310).build();
 		line.active = false;
+		if (tooltip != null) {
+			line.setTooltip(Tooltip.create(tooltip));
+		}
 		return line;
+	}
+
+	private static Component packsStatus() {
+		var contexts = SeedMap.get().index.contexts();
+		String error = contexts.lastError();
+		if (error != null) {
+			return Component.translatable("jm_seedmap.datapacks.error", error).withStyle(ChatFormatting.RED);
+		}
+		List<String> loaded = contexts.loadedPacks();
+		String fingerprint = GenContextProvider.packFingerprint(GenContextProvider.packDir(GenContextProvider.serverKey()));
+		if (loaded.isEmpty()) {
+			return Component.translatable(fingerprint.isEmpty() ? "jm_seedmap.datapacks.none" : "jm_seedmap.datapacks.pending");
+		}
+		return Component.translatable("jm_seedmap.datapacks.loaded", String.join(", ", loaded));
 	}
 
 	private static Component finderStatus(boolean hasHash) {
@@ -226,6 +310,11 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 		}
 		if (finderLine != null) {
 			finderLine.setMessage(finderStatus(SeedCheck.serverHashedSeed(mc.level).isPresent()));
+		}
+		if (packsLine != null && mc.level != null) {
+			Component status = packsStatus();
+			packsLine.setMessage(status);
+			packsLine.setTooltip(Tooltip.create(status));
 		}
 		if (seedBox != null && mc.level != null) {
 			Long seed = SeedMapConfig.get().seeds.get(GenContextProvider.serverKey());

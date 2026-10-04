@@ -97,6 +97,11 @@ public final class SeedMapCommands {
 					return 1;
 				})))
 			.then(literal("pins")
+				.executes(ctx -> {
+					Minecraft mc = ctx.getSource().getClient();
+					mc.schedule(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.PinsScreen(null)));
+					return 1;
+				})
 				.then(literal("show").executes(ctx -> toggle(ctx, c -> c.showPins = true, "jm_seedmap.cmd.pins_on")))
 				.then(literal("hide").executes(ctx -> toggle(ctx, c -> c.showPins = false, "jm_seedmap.cmd.pins_off")))
 				.then(literal("clear").executes(ctx -> {
@@ -118,6 +123,20 @@ public final class SeedMapCommands {
 				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = true, "jm_seedmap.cmd.slime_on")))
 				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = false, "jm_seedmap.cmd.slime_off")))
 				.then(literal("here").executes(SeedMapCommands::slimeHere)))
+			.then(literal("biomes")
+				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.showBiomes = true, "jm_seedmap.cmd.biomes_on")))
+				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showBiomes = false, "jm_seedmap.cmd.biomes_off"))))
+			.then(literal("datapacks").executes(SeedMapCommands::datapacks))
+			.then(literal("cache")
+				.then(literal("clear").executes(ctx -> {
+					long bytes = SeedMap.get().index.clearDiskCache();
+					ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.cache_cleared", bytes / 1024));
+					return 1;
+				})))
+			.then(literal("perf")
+				.then(argument("level", StringArgumentType.word())
+					.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(List.of("auto", "low", "normal", "high"), builder))
+					.executes(SeedMapCommands::perf)))
 			.then(literal("check").executes(ctx -> {
 				SeedMap.get().seedCheck.run(ctx.getSource().getClient(), SeedMap.get().index, false);
 				return 1;
@@ -148,6 +167,43 @@ public final class SeedMapCommands {
 				ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.reloaded"));
 				return 1;
 			})));
+	}
+
+	private static int perf(CommandContext<FabricClientCommandSource> ctx) {
+		String value = StringArgumentType.getString(ctx, "level").toUpperCase(Locale.ROOT);
+		try {
+			SeedMapConfig.get().performance = SeedMapConfig.Performance.valueOf(value);
+		} catch (IllegalArgumentException e) {
+			ctx.getSource().sendError(Component.literal("auto | low | normal | high"));
+			return 0;
+		}
+		SeedMapConfig.save();
+		ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.perf", ru.per.jmseedmap.core.Perf.current().name().toLowerCase(Locale.ROOT)));
+		return 1;
+	}
+
+	/** Opens (and creates) the data pack folder of this server and lists what is loaded from it. */
+	private static int datapacks(CommandContext<FabricClientCommandSource> ctx) {
+		Minecraft mc = ctx.getSource().getClient();
+		if (mc.getSingleplayerServer() != null) {
+			ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.datapacks.sp"));
+			return 1;
+		}
+		java.nio.file.Path dir = GenContextProvider.packDir(GenContextProvider.serverKey());
+		try {
+			java.nio.file.Files.createDirectories(dir);
+		} catch (java.io.IOException e) {
+			ctx.getSource().sendError(Component.literal(e.toString()));
+			return 0;
+		}
+		net.minecraft.util.Util.getPlatform().openPath(dir);
+		List<String> loaded = SeedMap.get().index.contexts().loadedPacks();
+		ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.datapacks.folder", dir.toString()));
+		ctx.getSource().sendFeedback(loaded.isEmpty()
+			? Component.translatable("jm_seedmap.datapacks.none")
+			: Component.translatable("jm_seedmap.datapacks.loaded", String.join(", ", loaded)));
+		ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.datapacks.hint").withStyle(ChatFormatting.GRAY));
+		return 1;
 	}
 
 	private static int status(CommandContext<FabricClientCommandSource> ctx) {
@@ -247,9 +303,10 @@ public final class SeedMapCommands {
 		StructureStyles.Group group = StructureStyles.group(id);
 		if (id.equals("all")) {
 			for (String known : StructureStyles.knownIds()) {
-				config.structures.put(known, visible);
+				StructureStyles.setEnabled(known, visible);
 			}
 			config.structures.replaceAll((k, v) -> visible);
+			StructureStyles.filtersChanged();
 			shownName = id;
 		} else if (group != null) {
 			group.setEnabled(visible);
@@ -258,7 +315,7 @@ public final class SeedMapCommands {
 			if (!id.contains(":")) {
 				id = "minecraft:" + id;
 			}
-			config.structures.put(id, visible);
+			StructureStyles.setEnabled(id, visible);
 			shownName = StructureStyles.displayName(id);
 		}
 		SeedMapConfig.save();

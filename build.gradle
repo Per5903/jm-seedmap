@@ -15,13 +15,17 @@ loom {
 				vmArg "-Djm_seedmap.selftest.screenshot=true"
 				vmArg "-Djm_seedmap.selftest.quit=true"
 				vmArg "-Djm_seedmap.selftest.slime=true"
+				if (project.hasProperty("quick")) {
+					vmArg "-Djm_seedmap.selftest.quick=true"
+				}
 				if (project.hasProperty("seed")) {
 					vmArg "-Djm_seedmap.selftest.seed=${project.property('seed')}"
 				}
 				if (project.hasProperty("mp")) {
 					programArgs "--quickPlayMultiplayer", "localhost:25599"
 				} else {
-					programArgs "--quickPlaySingleplayer", "selftest"
+					// -Pworld=selftest-dp: the world with test data packs (see testdata/datapacks).
+					programArgs "--quickPlaySingleplayer", project.findProperty("world") ?: "selftest"
 				}
 			}
 		}
@@ -84,9 +88,27 @@ dependencies {
 		localRuntime(xaeroMinimap) { transitive = false }
 		localRuntime(xaeroWorldMap) { transitive = false }
 	}
-	// Compatibility testing: ./gradlew runClient -Pmodernfix
+	// Compatibility testing: ./gradlew runClient -Pextra=modernfix,c2me,lithium (any of the names below).
+	def extraMods = [
+		modernfix    : "maven.modrinth:modernfix-mvus:5.27.19-build.2",
+		c2me         : "maven.modrinth:c2me-fabric:0.4.2-alpha.0.56+26.2",
+		lithium      : "maven.modrinth:lithium:mc26.2-0.25.3-fabric",
+		moonrise     : "maven.modrinth:moonrise-opt:1.1.2+151ce65",
+		scalablelux  : "maven.modrinth:scalablelux:0.3.0-alpha.0.3+26.2",
+		ferritecore  : "maven.modrinth:ferrite-core:9.0.0-fabric",
+		viafabricplus: "maven.modrinth:viafabricplus:5.0.2",
+	]
+	def extra = (project.findProperty("extra") ?: "").toString().split(",").findAll { it }
 	if (project.hasProperty("modernfix")) {
-		localRuntime("maven.modrinth:modernfix-mvus:5.27.19-build.2") { transitive = false }
+		extra += "modernfix"
+	}
+	extra.each { name ->
+		if (name == "seedcracker") {
+			// Not on Modrinth: put seedcrackerX-<version>.jar from its GitHub releases into libs/.
+			localRuntime fileTree(dir: "libs", include: "seedcrackerX-*.jar")
+		} else {
+			localRuntime(extraMods[name] ?: { throw new GradleException("Unknown extra mod: " + name) }()) { transitive = false }
+		}
 	}
 }
 

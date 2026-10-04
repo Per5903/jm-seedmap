@@ -2,6 +2,7 @@ package ru.per.jmseedmap.core;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -10,8 +11,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.Holder;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -20,6 +25,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 import org.jspecify.annotations.Nullable;
 import ru.per.jmseedmap.SeedMapClient;
+import ru.per.jmseedmap.SeedMapConfig;
 import ru.per.jmseedmap.gen.FoundStructure;
 import ru.per.jmseedmap.gen.GenContext;
 import ru.per.jmseedmap.gen.GenContextProvider;
@@ -30,15 +36,15 @@ import ru.per.jmseedmap.gen.StructureFinder;
  * the index computes the missing 512x512 tiles in the background, nearest to the view center first,
  * and {@link #query} returns what is already known. The dimension always comes from the view,
  * so a map showing the Nether gets Nether structures.
+ * <p>
+ * Finished tiles are also kept on disk ({@link TileCache}) and read back the next time the same world is opened.
  */
 public final class StructureIndex {
-	/** Tiles further than this from a view center are not computed, which bounds work when zoomed far out. */
-	private static final int MAX_TILE_RADIUS = 12;
-	private static final int MAX_PENDING = 64;
 	private static final int MAX_CACHED = 80_000;
 	private static final long VIEW_TTL_MS = 1500;
+	private static final long SAVE_INTERVAL_MS = 30_000;
 
-	private record TileKey(String contextId, Identifier set, int tileX, int tileZ) {
+	record TileKey(String contextId, Identifier set, int tileX, int tileZ) {
 	}
 
 	private record View(ResourceKey<Level> dimension, double minX, double minZ, double maxX, double maxZ, long time) {
@@ -47,31 +53,53 @@ public final class StructureIndex {
 	private record Candidate(GenContext context, Holder<StructureSet> set, TileKey key, double distance) {
 	}
 
-	private final ExecutorService workers;
+	private record EnabledSets(int filterVersion, List<Holder<StructureSet>> sets) {
+	}
+
+	private final ThreadPoolExecutor workers;
 	/** Separate from {@link #workers}: a search waits for contexts that are built on the workers. */
-	private final ExecutorService search = Executors.newSingleThreadExecutor(task -> {
-		Thread thread = new Thread(task, "SeedMap search");
-		thread.setDaemon(true);
-		return thread;
-	});
+	private final ExecutorService search = singleThread("SeedMap search");
+	/** Disk cache reads and writes. */
+	private final ExecutorService io = singleThread("SeedMap cache");
 	private final GenContextProvider contexts;
+	private final TileCache cache;
 	private final Map<TileKey, List<FoundStructure>> results = new ConcurrentHashMap<>();
 	private final Set<TileKey> pending = ConcurrentHashMap.newKeySet();
+	private final Set<TileKey> failed = ConcurrentHashMap.newKeySet();
 	private final Map<String, View> views = new ConcurrentHashMap<>();
 	private final Map<ResourceKey<Level>, GenContextProvider.Status> lastStatus = new ConcurrentHashMap<>();
+	private final Map<String, EnabledSets> enabledSets = new ConcurrentHashMap<>();
+	/** Contexts whose disk cache was read (or is being read) in this session. */
+	private final Set<String> cacheLoaded = ConcurrentHashMap.newKeySet();
+	/** Contexts with tiles computed since the last save, and the dimension they belong to. */
+	private final Map<String, ResourceKey<Level>> cacheDirty = new ConcurrentHashMap<>();
 	private final AtomicInteger completed = new AtomicInteger();
 	private volatile boolean errorLogged;
+	private long lastSave = Util.getMillis();
+	private int appliedThreads;
 
 	public StructureIndex() {
-		int threads = Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 1, 4);
 		AtomicInteger n = new AtomicInteger();
-		this.workers = Executors.newFixedThreadPool(threads, task -> {
+		int threads = Perf.current().threads;
+		this.workers = new ThreadPoolExecutor(threads, threads, 30, TimeUnit.SECONDS, new LinkedBlockingQueue<>(), task -> {
 			Thread thread = new Thread(task, "SeedMap worker " + n.incrementAndGet());
 			thread.setDaemon(true);
 			thread.setPriority(Thread.MIN_PRIORITY + 1);
 			return thread;
 		});
+		this.workers.allowCoreThreadTimeOut(true);
+		this.appliedThreads = threads;
 		this.contexts = new GenContextProvider(workers);
+		this.cache = new TileCache(Minecraft.getInstance().gameDirectory.toPath().resolve("jm_seedmap").resolve("cache"));
+	}
+
+	private static ExecutorService singleThread(String name) {
+		return Executors.newSingleThreadExecutor(task -> {
+			Thread thread = new Thread(task, name);
+			thread.setDaemon(true);
+			thread.setPriority(Thread.MIN_PRIORITY + 1);
+			return thread;
+		});
 	}
 
 	/**
@@ -85,6 +113,10 @@ public final class StructureIndex {
 	public GenContextProvider.@Nullable Status status(ResourceKey<Level> dimension) {
 		GenContextProvider.Status status = lastStatus.get(dimension);
 		return status != null ? status : contexts.get(dimension).status();
+	}
+
+	public GenContextProvider contexts() {
+		return contexts;
 	}
 
 	/** The ready generator context for a dimension, or null while loading / without a seed. */
@@ -101,41 +133,73 @@ public final class StructureIndex {
 		return completed.get();
 	}
 
+	/** Runs low-priority background work (biome tiles) on the same threads as the structure search. */
+	void executeBackground(Runnable task) {
+		workers.execute(task);
+	}
+
+	int workerQueueSize() {
+		return workers.getQueue().size();
+	}
+
 	/** Schedules computation for all live views. Render thread. */
 	public void tick() {
+		Perf perf = Perf.current();
+		applyThreads(perf.threads);
 		long now = Util.getMillis();
 		views.values().removeIf(view -> now - view.time() > VIEW_TTL_MS);
 		List<Candidate> toCompute = new ArrayList<>();
-		Set<TileKey> wanted = new java.util.HashSet<>();
+		Set<TileKey> wanted = new HashSet<>();
 		for (View view : views.values()) {
-			collect(view, wanted, toCompute);
+			collect(view, perf, wanted, toCompute);
 		}
 		toCompute.sort(Comparator.comparingDouble(Candidate::distance));
 		for (Candidate candidate : toCompute) {
-			if (pending.size() >= MAX_PENDING) {
+			if (pending.size() >= perf.maxPending) {
 				break;
 			}
 			submit(candidate);
 		}
 		if (results.size() > MAX_CACHED) {
+			saveDirty();
 			results.keySet().removeIf(key -> !wanted.contains(key));
+		}
+		if (now - lastSave > SAVE_INTERVAL_MS) {
+			lastSave = now;
+			saveDirty();
 		}
 	}
 
-	private void collect(View view, Set<TileKey> wanted, List<Candidate> toCompute) {
+	private void applyThreads(int threads) {
+		if (threads == appliedThreads) {
+			return;
+		}
+		// Growing: raise the maximum first; shrinking: lower the core size first.
+		if (threads > appliedThreads) {
+			workers.setMaximumPoolSize(threads);
+			workers.setCorePoolSize(threads);
+		} else {
+			workers.setCorePoolSize(threads);
+			workers.setMaximumPoolSize(threads);
+		}
+		appliedThreads = threads;
+	}
+
+	private void collect(View view, Perf perf, Set<TileKey> wanted, List<Candidate> toCompute) {
 		GenContextProvider.Lookup lookup = contexts.get(view.dimension());
 		lastStatus.put(view.dimension(), lookup.status());
 		GenContext ctx = lookup.context();
 		if (ctx == null) {
 			return;
 		}
+		loadCache(ctx);
 		int centerX = tile((view.minX() + view.maxX()) / 2);
 		int centerZ = tile((view.minZ() + view.maxZ()) / 2);
-		int minX = Math.max(tile(view.minX() - 64), centerX - MAX_TILE_RADIUS);
-		int maxX = Math.min(tile(view.maxX() + 64), centerX + MAX_TILE_RADIUS);
-		int minZ = Math.max(tile(view.minZ() - 64), centerZ - MAX_TILE_RADIUS);
-		int maxZ = Math.min(tile(view.maxZ() + 64), centerZ + MAX_TILE_RADIUS);
-		List<Holder<StructureSet>> sets = enabledSets(ctx, StructureStyles::isEnabled);
+		int minX = Math.max(tile(view.minX() - 64), centerX - perf.tileRadius);
+		int maxX = Math.min(tile(view.maxX() + 64), centerX + perf.tileRadius);
+		int minZ = Math.max(tile(view.minZ() - 64), centerZ - perf.tileRadius);
+		int maxZ = Math.min(tile(view.maxZ() + 64), centerZ + perf.tileRadius);
+		List<Holder<StructureSet>> sets = enabledSets(ctx);
 		for (int tx = minX; tx <= maxX; tx++) {
 			for (int tz = minZ; tz <= maxZ; tz++) {
 				double distance = Math.hypot(tx - centerX, tz - centerZ);
@@ -154,7 +218,19 @@ public final class StructureIndex {
 		return Math.floorDiv((int) Math.floor(block), StructureFinder.TILE_BLOCKS);
 	}
 
-	private static List<Holder<StructureSet>> enabledSets(GenContext ctx, Predicate<String> structureFilter) {
+	/** Structure sets with at least one enabled structure; cached until a toggle changes. */
+	private List<Holder<StructureSet>> enabledSets(GenContext ctx) {
+		int version = StructureStyles.filterVersion();
+		EnabledSets cached = enabledSets.get(ctx.id());
+		if (cached != null && cached.filterVersion() == version) {
+			return cached.sets();
+		}
+		List<Holder<StructureSet>> sets = setsMatching(ctx, StructureStyles::isEnabled);
+		enabledSets.put(ctx.id(), new EnabledSets(version, sets));
+		return sets;
+	}
+
+	private static List<Holder<StructureSet>> setsMatching(GenContext ctx, Predicate<String> structureFilter) {
 		List<Holder<StructureSet>> sets = new ArrayList<>();
 		for (Holder<StructureSet> set : ctx.structureState().possibleStructureSets()) {
 			if (set.unwrapKey().isEmpty()) {
@@ -167,7 +243,7 @@ public final class StructureIndex {
 				}
 			}
 		}
-		return sets;
+		return List.copyOf(sets);
 	}
 
 	private void submit(Candidate candidate) {
@@ -187,15 +263,20 @@ public final class StructureIndex {
 	private List<FoundStructure> compute(GenContext ctx, Holder<StructureSet> set, TileKey key) {
 		List<FoundStructure> found;
 		try {
-			found = StructureFinder.findInTile(ctx, set, key.tileX(), key.tileZ());
+			found = List.copyOf(StructureFinder.findInTile(ctx, set, key.tileX(), key.tileZ()));
 		} catch (Throwable t) {
 			if (!errorLogged) {
 				errorLogged = true;
 				SeedMapClient.LOGGER.error("Structure search failed for {} in tile {},{}", key.set(), key.tileX(), key.tileZ(), t);
 			}
-			found = List.of();
+			// Not cached on disk: a failure may be temporary.
+			failed.add(key);
+			results.put(key, List.of());
+			completed.incrementAndGet();
+			return List.of();
 		}
 		results.put(key, found);
+		cacheDirty.put(ctx.id(), ctx.dimension());
 		completed.incrementAndGet();
 		return found;
 	}
@@ -209,7 +290,7 @@ public final class StructureIndex {
 			return List.of();
 		}
 		List<FoundStructure> out = new ArrayList<>();
-		List<Holder<StructureSet>> sets = enabledSets(ctx, StructureStyles::isEnabled);
+		List<Holder<StructureSet>> sets = enabledSets(ctx);
 		for (int tx = tile(minX); tx <= tile(maxX); tx++) {
 			for (int tz = tile(minZ); tz <= tile(maxZ); tz++) {
 				for (Holder<StructureSet> set : sets) {
@@ -241,7 +322,8 @@ public final class StructureIndex {
 			if (ctx == null) {
 				return Optional.empty();
 			}
-			List<Holder<StructureSet>> sets = enabledSets(ctx, filter);
+			loadCacheNow(ctx);
+			List<Holder<StructureSet>> sets = setsMatching(ctx, filter);
 			if (sets.isEmpty()) {
 				return Optional.empty();
 			}
@@ -278,6 +360,42 @@ public final class StructureIndex {
 				}
 			}
 			return Optional.ofNullable(best);
+		}, search);
+	}
+
+	/**
+	 * All structures accepted by {@code filter} within {@code radius} blocks of (x, z), nearest first.
+	 * Computes missing tiles; runs on the search thread.
+	 */
+	public CompletableFuture<List<FoundStructure>> around(
+		ResourceKey<Level> dimension, double x, double z, double radius, Predicate<String> filter
+	) {
+		return CompletableFuture.supplyAsync(() -> {
+			GenContext ctx = awaitContext(dimension);
+			if (ctx == null) {
+				return List.of();
+			}
+			loadCacheNow(ctx);
+			List<Holder<StructureSet>> sets = setsMatching(ctx, filter);
+			List<FoundStructure> out = new ArrayList<>();
+			for (int tx = tile(x - radius); tx <= tile(x + radius); tx++) {
+				for (int tz = tile(z - radius); tz <= tile(z + radius); tz++) {
+					for (Holder<StructureSet> set : sets) {
+						TileKey key = new TileKey(ctx.id(), set.unwrapKey().get().identifier(), tx, tz);
+						List<FoundStructure> found = results.get(key);
+						if (found == null) {
+							found = compute(ctx, set, key);
+						}
+						for (FoundStructure s : found) {
+							if (filter.test(s.displayId()) && s.distanceSqr(x, z) <= radius * radius) {
+								out.add(s);
+							}
+						}
+					}
+				}
+			}
+			out.sort(Comparator.comparingDouble(s -> s.distanceSqr(x, z)));
+			return out;
 		}, search);
 	}
 
@@ -328,11 +446,79 @@ public final class StructureIndex {
 		return null;
 	}
 
-	/** Forget all computed results, e.g. after the seed or preset changed. */
+	// ---- disk cache ----
+
+	private void loadCache(GenContext ctx) {
+		if (SeedMapConfig.get().diskCache && cacheLoaded.add(ctx.id())) {
+			io.execute(() -> readCache(ctx));
+		}
+	}
+
+	/** For searches: read the cache on this thread so the search does not recompute what is on disk. */
+	private void loadCacheNow(GenContext ctx) {
+		if (SeedMapConfig.get().diskCache && cacheLoaded.add(ctx.id())) {
+			readCache(ctx);
+		}
+	}
+
+	private void readCache(GenContext ctx) {
+		long start = Util.getMillis();
+		List<TileCache.Tile> tiles = cache.read(ctx.id(), ctx.dimension());
+		int added = 0;
+		for (TileCache.Tile tile : tiles) {
+			if (results.putIfAbsent(new TileKey(ctx.id(), tile.set(), tile.tileX(), tile.tileZ()), tile.structures()) == null) {
+				added++;
+			}
+		}
+		if (added > 0) {
+			completed.incrementAndGet();
+			SeedMapClient.LOGGER.info("Read {} structure tiles of {} from the disk cache in {} ms", added, ctx.dimension().identifier(),
+				Util.getMillis() - start);
+		}
+	}
+
+	/** Writes every context with new tiles; the snapshot is taken here, the file is written on the cache thread. */
+	private void saveDirty() {
+		if (!SeedMapConfig.get().diskCache || cacheDirty.isEmpty()) {
+			cacheDirty.clear();
+			return;
+		}
+		Map<String, ResourceKey<Level>> dirty = Map.copyOf(cacheDirty);
+		cacheDirty.clear();
+		Map<String, List<TileCache.Tile>> snapshot = new java.util.HashMap<>();
+		for (Map.Entry<TileKey, List<FoundStructure>> e : results.entrySet()) {
+			TileKey key = e.getKey();
+			if (dirty.containsKey(key.contextId()) && !failed.contains(key)) {
+				snapshot.computeIfAbsent(key.contextId(), k -> new ArrayList<>())
+					.add(new TileCache.Tile(key.set(), key.tileX(), key.tileZ(), e.getValue()));
+			}
+		}
+		io.execute(() -> snapshot.forEach(cache::write));
+	}
+
+	/** Frees the disk cache; returns the number of bytes deleted. Blocks until pending writes are done. */
+	public long clearDiskCache() {
+		cacheDirty.clear();
+		try {
+			return io.submit(cache::clear).get();
+		} catch (Exception e) {
+			return 0;
+		}
+	}
+
+	public long diskCacheBytes() {
+		return cache.sizeBytes();
+	}
+
+	/** Forget all computed results, e.g. after the seed or preset changed. Unsaved tiles are written first. */
 	public void reset() {
+		saveDirty();
 		results.clear();
+		failed.clear();
 		views.clear();
 		lastStatus.clear();
+		enabledSets.clear();
+		cacheLoaded.clear();
 		contexts.invalidate();
 		completed.incrementAndGet();
 		errorLogged = false;
@@ -343,5 +529,11 @@ public final class StructureIndex {
 		contexts.shutdown();
 		workers.shutdownNow();
 		search.shutdownNow();
+		io.shutdown();
+		try {
+			io.awaitTermination(5, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 }

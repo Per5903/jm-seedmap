@@ -29,11 +29,11 @@ import ru.per.jmseedmap.map.MapBackend;
 public final class SeedMap {
 	/** How far "nearest" searches go, in 512-block tiles. */
 	private static final int NEAREST_MAX_TILES = 40;
-	private static final double PLAYER_VIEW_RADIUS = 320;
 
 	private static final SeedMap INSTANCE = new SeedMap();
 
 	public final StructureIndex index = new StructureIndex();
+	public final BiomeLayer biomes = new BiomeLayer(index);
 	public final SeedCheck seedCheck = new SeedCheck();
 	public final SeedFinder seedFinder = new SeedFinder();
 	/** Tick at which to run a one-off seed check (after a seed was entered or found), or -1. */
@@ -64,6 +64,7 @@ public final class SeedMap {
 	}
 
 	public void invalidateVisuals() {
+		StructureStyles.filtersChanged();
 		revision++;
 	}
 
@@ -90,8 +91,8 @@ public final class SeedMap {
 		SeedMapConfig config = SeedMapConfig.get();
 		if (config.enabled) {
 			// Keep the player's surroundings computed: feeds the minimap, visited marks and arrival checks.
-			index.requestView("player", mc.level.dimension(), player.getX() - PLAYER_VIEW_RADIUS, player.getZ() - PLAYER_VIEW_RADIUS,
-				player.getX() + PLAYER_VIEW_RADIUS, player.getZ() + PLAYER_VIEW_RADIUS);
+			double r = Perf.current().playerRadius;
+			index.requestView("player", mc.level.dimension(), player.getX() - r, player.getZ() - r, player.getX() + r, player.getZ() + r);
 		}
 		for (MapBackend backend : backends) {
 			try {
@@ -115,6 +116,9 @@ public final class SeedMap {
 		}
 		if (ticks % 200 == 0 && world != null) {
 			world.saveIfDirty();
+		}
+		if (ticks % 100 == 50) {
+			ru.per.jmseedmap.compat.SeedCrackerCompat.tick(this, mc);
 		}
 	}
 
@@ -146,8 +150,11 @@ public final class SeedMap {
 		world = null;
 		worldKey = null;
 		index.reset();
+		biomes.reset();
 		seedCheck.reset();
 		seedFinder.cancel();
+		ru.per.jmseedmap.compat.SeedCrackerCompat.reset();
+		ru.per.jmseedmap.compat.VersionCheck.reset();
 		checkAt = -1;
 		pinsRevision++;
 		revision++;
@@ -245,6 +252,29 @@ public final class SeedMap {
 		boolean changed = world != null && world.clearTarget();
 		pinsRevision++;
 		return changed;
+	}
+
+	public void renamePin(WorldData.Pin pin, String name) {
+		if (world != null && world.replacePin(pin, new WorldData.Pin(pin.key(), pin.dimension(), pin.x(), pin.y(), pin.z(),
+			pin.structure(), name, pin.color(), pin.target()))) {
+			pinsRevision++;
+		}
+	}
+
+	public void removePin(WorldData.Pin pin) {
+		if (world != null && world.removeExact(pin)) {
+			pinsRevision++;
+			revision++;
+		}
+	}
+
+	/** Makes a pin the navigation target (the pin itself stays). */
+	public void targetPin(WorldData.Pin pin) {
+		if (world != null) {
+			String name = pin.name().startsWith("→ ") ? pin.name() : "→ " + pin.name();
+			world.addPin(new WorldData.Pin(pin.key(), pin.dimension(), pin.x(), pin.y(), pin.z(), pin.structure(), name, pin.color(), true));
+			pinsRevision++;
+		}
 	}
 
 	public int clearPins() {
@@ -414,7 +444,36 @@ public final class SeedMap {
 	/** After seed/preset change: recompute everything. */
 	public void resetStructures() {
 		index.reset();
+		biomes.reset();
 		seedCheck.reset();
 		revision++;
+	}
+
+	/**
+	 * A seed found by another mod (SeedCrackerX). Saved for the current server like a typed one; replaces a different
+	 * seed that was entered before, since a cracked seed is verified against the world.
+	 */
+	public void onExternalSeed(long seed, String source) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.getSingleplayerServer() != null || mc.level == null || !SeedMapConfig.get().seedCrackerAuto) {
+			return;
+		}
+		String serverKey = GenContextProvider.serverKey();
+		Long previous = SeedMapConfig.get().seeds.put(serverKey, seed);
+		if (previous != null && previous == seed) {
+			return;
+		}
+		SeedMapConfig.save();
+		seedFinder.cancel();
+		resetStructures();
+		scheduleSeedCheck();
+		SeedMapClient.LOGGER.info("Seed {} for {} taken from {}", seed, serverKey, source);
+		if (mc.player != null) {
+			String text = Long.toString(seed);
+			mc.player.sendSystemMessage(Component.translatable(previous == null ? "jm_seedmap.external.seed" : "jm_seedmap.external.seed_replaced",
+					source, Component.literal(text).withStyle(style -> style.withColor(ChatFormatting.GREEN)
+						.withClickEvent(new net.minecraft.network.chat.ClickEvent.CopyToClipboard(text))), previous == null ? "" : previous.toString())
+				.withStyle(ChatFormatting.AQUA));
+		}
 	}
 }

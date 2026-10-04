@@ -1,0 +1,14 @@
+{
+  "placement": {
+    "type": "minecraft:random_spread",
+    "salt": 424242,
+    "separation": 6,
+    "spacing": 20
+  },
+  "structures": [
+    {
+      "structure": "smtest:watchtower",
+      "weight": 1
+    }
+  ]
+}

@@ -23,6 +23,9 @@ public final class SeedMapConfig {
 
 	public enum VisitedMode { SHOW, DIM, HIDE }
 
+	/** How much CPU and memory the mod may use; AUTO picks by core count and heap size. */
+	public enum Performance { AUTO, LOW, NORMAL, HIGH }
+
 	/** The structure layer as a whole (toggle key). */
 	public boolean enabled = true;
 	public boolean showOnMinimap = true;
@@ -33,6 +36,17 @@ public final class SeedMapConfig {
 	public VisitedMode visitedMode = VisitedMode.DIM;
 	/** Slime chunk overlay (Overworld only). */
 	public boolean showSlimeChunks = false;
+	/** Biome colors from the seed under the map (world maps only). */
+	public boolean showBiomes = false;
+	/** Xaero's World Map: color only the parts the player has not explored yet. */
+	public boolean biomesOnlyUnexplored = true;
+	/** Biome layer opacity, percent. */
+	public int biomeOpacity = 60;
+	public Performance performance = Performance.AUTO;
+	/** Keep computed structure tiles on disk so a revisited world fills in instantly. */
+	public boolean diskCache = true;
+	/** Take the seed from SeedCrackerX as soon as it finds one. */
+	public boolean seedCrackerAuto = true;
 	/** Re-check the seed in the background now and then (otherwise only on demand). */
 	public boolean seedCheckAuto = false;
 	/** Horizontal distance from a structure's marker at which it counts as visited. */
@@ -64,6 +78,7 @@ public final class SeedMapConfig {
 			}
 		}
 		instance.fixNulls();
+		ru.per.jmseedmap.core.StructureStyles.filtersChanged();
 	}
 
 	public static void save() {
@@ -82,5 +97,7 @@ public final class SeedMapConfig {
 		if (presets == null) presets = new LinkedHashMap<>();
 		if (structures == null) structures = new LinkedHashMap<>();
 		if (visitedMode == null) visitedMode = VisitedMode.DIM;
+		if (performance == null) performance = Performance.AUTO;
+		biomeOpacity = Math.clamp(biomeOpacity, 10, 100);
 	}
 }
