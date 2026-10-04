@@ -1,5 +1,6 @@
 package ru.per.jmseedmap.gen;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -12,7 +13,11 @@ import net.minecraft.world.level.levelgen.WorldgenRandom;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
+import net.minecraft.world.level.levelgen.structure.TemplateStructurePiece;
+import net.minecraft.world.level.levelgen.structure.structures.EndCityPieces;
+import org.jspecify.annotations.Nullable;
 import net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement;
 import net.minecraft.world.level.levelgen.structure.placement.RandomSpreadStructurePlacement;
 import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;
@@ -111,6 +116,37 @@ public final class StructureFinder {
 		}
 	}
 
+	private static final Field TEMPLATE_NAME = templateNameField();
+
+	private static @Nullable Field templateNameField() {
+		try {
+			Field field = TemplateStructurePiece.class.getDeclaredField("templateName");
+			field.setAccessible(true);
+			return field;
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	/** "ship" for End cities that generated the elytra ship piece. */
+	public static @Nullable String variantOf(StructureStart start) {
+		if (TEMPLATE_NAME == null) {
+			return null;
+		}
+		for (StructurePiece piece : start.getPieces()) {
+			if (piece instanceof EndCityPieces.EndCityPiece) {
+				try {
+					if ("ship".equals(TEMPLATE_NAME.get(piece))) {
+						return "ship";
+					}
+				} catch (IllegalAccessException ignored) {
+					return null;
+				}
+			}
+		}
+		return null;
+	}
+
 	private static Optional<FoundStructure> tryGenerate(GenContext ctx, StructureSet.StructureSelectionEntry entry, ChunkPos chunk) {
 		Holder<Structure> holder = entry.structure();
 		Optional<ResourceKey<Structure>> key = holder.unwrapKey();
@@ -133,7 +169,7 @@ public final class StructureFinder {
 				structure.biomes()::contains
 			);
 			return structure.findValidGenerationPoint(context)
-				.map(stub -> new FoundStructure(ctx.dimension(), key.get(), chunk, stub.position()));
+				.map(stub -> new FoundStructure(ctx.dimension(), key.get(), chunk, stub.position(), null));
 		}
 		StructureStart start = structure.generate(
 			holder,
@@ -155,6 +191,6 @@ public final class StructureFinder {
 		// The first piece is the "heart" of the structure: stronghold stairs, fortress start, mansion entrance...
 		BoundingBox box = start.getPieces().isEmpty() ? start.getBoundingBox() : start.getPieces().get(0).getBoundingBox();
 		BlockPos center = box.getCenter();
-		return Optional.of(new FoundStructure(ctx.dimension(), key.get(), chunk, center));
+		return Optional.of(new FoundStructure(ctx.dimension(), key.get(), chunk, center, variantOf(start)));
 	}
 }

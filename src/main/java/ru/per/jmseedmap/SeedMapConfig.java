@@ -31,6 +31,10 @@ public final class SeedMapConfig {
 	/** Pinned structures (waypoints made from the map) are shown as waypoints. */
 	public boolean showPins = true;
 	public VisitedMode visitedMode = VisitedMode.DIM;
+	/** Slime chunk overlay (Overworld only). */
+	public boolean showSlimeChunks = false;
+	/** Compare real biomes with the seed's prediction and warn about a wrong seed. */
+	public boolean seedCheck = true;
 	/** Horizontal distance from a structure's marker at which it counts as visited. */
 	public int visitRadius = 48;
 	/** Remove the navigation target once the player gets this close (0 = never). */

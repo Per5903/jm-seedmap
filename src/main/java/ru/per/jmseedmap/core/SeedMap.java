@@ -34,6 +34,7 @@ public final class SeedMap {
 	private static final SeedMap INSTANCE = new SeedMap();
 
 	public final StructureIndex index = new StructureIndex();
+	public final SeedCheck seedCheck = new SeedCheck();
 	private final List<MapBackend> backends = new CopyOnWriteArrayList<>();
 	private @Nullable WorldData world;
 	private @Nullable String worldKey;
@@ -103,6 +104,9 @@ public final class SeedMap {
 		if (ticks % 10 == 0) {
 			trackVisits(mc, player, config);
 		}
+		if (ticks % 100 == 0 && config.seedCheck) {
+			seedCheck.tick(mc, index);
+		}
 		if (ticks % 200 == 0 && world != null) {
 			world.saveIfDirty();
 		}
@@ -136,6 +140,7 @@ public final class SeedMap {
 		world = null;
 		worldKey = null;
 		index.reset();
+		seedCheck.reset("");
 		pinsRevision++;
 		revision++;
 	}
@@ -185,7 +190,7 @@ public final class SeedMap {
 			if (s.distanceSqr(player.getX(), player.getZ()) <= r * r && world.setVisited(s.key(), true)) {
 				revision++;
 				if (config.visitedMode != SeedMapConfig.VisitedMode.SHOW) {
-					player.sendOverlayMessage(Component.translatable("jm_seedmap.msg.visited", StructureStyles.displayName(s.id())));
+					player.sendOverlayMessage(Component.translatable("jm_seedmap.msg.visited", StructureStyles.displayName(s.displayId())));
 				}
 			}
 		}
@@ -242,9 +247,9 @@ public final class SeedMap {
 	}
 
 	private static WorldData.Pin pinFor(FoundStructure s, boolean target) {
-		String name = StructureStyles.displayName(s.id());
+		String name = StructureStyles.displayName(s.displayId());
 		return new WorldData.Pin(s.key(), s.dimension().identifier().toString(), s.pos().getX(), s.pos().getY(), s.pos().getZ(),
-			s.id(), target ? "→ " + name : name, StructureStyles.style(s.id()).color(), target);
+			s.displayId(), target ? "→ " + name : name, StructureStyles.style(s.displayId()).color(), target);
 	}
 
 	// ---- nearest ----
@@ -280,7 +285,7 @@ public final class SeedMap {
 			double dx = s.pos().getX() + 0.5 - p.getX();
 			double dz = s.pos().getZ() + 0.5 - p.getZ();
 			int distance = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
-			p.sendSystemMessage(Component.translatable("jm_seedmap.msg.nearest", StructureStyles.displayName(s.id()), distance,
+			p.sendSystemMessage(Component.translatable("jm_seedmap.msg.nearest", StructureStyles.displayName(s.displayId()), distance,
 					Component.translatable("jm_seedmap.dir." + direction(dx, dz)), s.pos().getX(), s.pos().getZ())
 				.withStyle(ChatFormatting.AQUA));
 		}));
@@ -309,6 +314,7 @@ public final class SeedMap {
 	/** After seed/preset change: recompute everything. */
 	public void resetStructures() {
 		index.reset();
+		seedCheck.reset("");
 		revision++;
 	}
 }

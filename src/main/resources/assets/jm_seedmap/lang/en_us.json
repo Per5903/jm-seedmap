@@ -140,5 +140,21 @@
   "jm_seedmap.cmd.pins_off": "SeedMap pins hidden",
   "jm_seedmap.cmd.pins_cleared": "Pins removed: %s",
   "jm_seedmap.cmd.visited_cleared": "Visited marks reset: %s",
-  "jm_seedmap.cmd.visited_mode": "Visited: %s"
+  "jm_seedmap.cmd.visited_mode": "Visited: %s",
+  "jm_seedmap.structure.minecraft.end_city_ship": "End City with Ship (elytra)",
+  "jm_seedmap.group.end_city_ship": "End Cities with Ship",
+  "jm_seedmap.opt.slime": "Slime chunks",
+  "jm_seedmap.opt.seed_check": "Seed check",
+  "jm_seedmap.cmd.slime_on": "Slime chunks shown (Overworld only)",
+  "jm_seedmap.cmd.slime_off": "Slime chunks hidden",
+  "jm_seedmap.cmd.slime_yes": "Chunk %s, %s is a slime chunk ✔",
+  "jm_seedmap.cmd.slime_no": "Chunk %s, %s is not a slime chunk",
+  "jm_seedmap.cmd.slime_overworld": "Slime chunks only exist in the Overworld",
+  "jm_seedmap.check.ok": "[SeedMap] Seed confirmed: biomes match %s%%",
+  "jm_seedmap.check.suspect": "[SeedMap] Seed questionable: biomes match only %s%%. Check the world type (/seedmap preset) or server version",
+  "jm_seedmap.check.wrong": "[SeedMap] The seed looks wrong: biomes match %s%%. Structures on the map are not real",
+  "jm_seedmap.check.status_unknown": "Seed check: collecting data (%s of %s)",
+  "jm_seedmap.check.status_ok": "Seed check: ✔ %s%% match (%s samples)",
+  "jm_seedmap.check.status_suspect": "Seed check: ? %s%% match (%s samples)",
+  "jm_seedmap.check.status_wrong": "Seed check: ✘ %s%% match (%s samples)"
 }

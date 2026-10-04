@@ -105,6 +105,14 @@ public final class SeedMapCommands {
 					.then(argument("mode", StringArgumentType.word())
 						.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(List.of("show", "dim", "hide"), builder))
 						.executes(SeedMapCommands::visitedMode))))
+			.then(literal("slime")
+				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = true, "jm_seedmap.cmd.slime_on")))
+				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = false, "jm_seedmap.cmd.slime_off")))
+				.then(literal("here").executes(SeedMapCommands::slimeHere)))
+			.then(literal("check").executes(ctx -> {
+				ctx.getSource().sendFeedback(SeedMap.get().seedCheck.describe());
+				return 1;
+			}))
 			.then(literal("reload").executes(ctx -> {
 				SeedMap.get().resetStructures();
 				ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.reloaded"));
@@ -138,6 +146,7 @@ public final class SeedMapCommands {
 			source.sendFeedback(Component.translatable("jm_seedmap.cmd.dimension", mc.level.dimension().identifier().toString(),
 				Component.translatable(statusKey), seedMap.index.pendingTiles()));
 			source.sendFeedback(Component.translatable("jm_seedmap.cmd.pins_count", seedMap.pins().size()));
+			source.sendFeedback(seedMap.seedCheck.describe());
 		}
 		return 1;
 	}
@@ -253,6 +262,27 @@ public final class SeedMapCommands {
 		StructureStyles.Group target = group;
 		SeedMap.get().findNearest(target::contains, target.displayName());
 		return 1;
+	}
+
+	private static int slimeHere(CommandContext<FabricClientCommandSource> ctx) {
+		Minecraft mc = ctx.getSource().getClient();
+		if (mc.level == null || mc.player == null) {
+			return 0;
+		}
+		var genContext = SeedMap.get().index.context(mc.level.dimension());
+		if (genContext == null) {
+			ctx.getSource().sendError(Component.translatable("jm_seedmap.status.no_seed"));
+			return 0;
+		}
+		if (GenContextProvider.resolveStem(mc.level.dimension(), mc.level) != net.minecraft.world.level.dimension.LevelStem.OVERWORLD) {
+			ctx.getSource().sendError(Component.translatable("jm_seedmap.cmd.slime_overworld"));
+			return 0;
+		}
+		var chunk = mc.player.chunkPosition();
+		boolean slime = ru.per.jmseedmap.core.SlimeChunks.isSlimeChunk(genContext.seed(), chunk.x(), chunk.z());
+		ctx.getSource().sendFeedback(Component.translatable(slime ? "jm_seedmap.cmd.slime_yes" : "jm_seedmap.cmd.slime_no", chunk.x(), chunk.z())
+			.withStyle(slime ? ChatFormatting.GREEN : ChatFormatting.GRAY));
+		return slime ? 1 : 0;
 	}
 
 	private static int visitedMode(CommandContext<FabricClientCommandSource> ctx) {

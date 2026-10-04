@@ -69,13 +69,17 @@ final class SelfTest {
 			Thread.sleep(2_000L);
 			boolean ok = Long.valueOf(seed).equals(SeedMapConfig.get().seeds.get(GenContextProvider.serverKey()));
 			SeedMapClient.LOGGER.info("SELFTEST multiplayer seed stored for {}: {}", GenContextProvider.serverKey(), ok);
+			Thread.sleep(40_000L);
+			mc.execute(() -> SeedMapClient.LOGGER.info("SELFTEST seed check (seed {}): {}", seed,
+				ru.per.jmseedmap.core.SeedMap.get().seedCheck.describe().getString()));
+			Thread.sleep(500L);
 			return ok;
 		}
 		GenContextProvider provider = new GenContextProvider(Executors.newFixedThreadPool(2));
 		boolean ok = true;
 		ok &= check(server, provider, Level.OVERWORLD, LevelStem.OVERWORLD, -2, 1);
 		ok &= check(server, provider, Level.NETHER, LevelStem.NETHER, -1, 0);
-		ok &= check(server, provider, Level.END, LevelStem.END, -3, 2);
+		ok &= check(server, provider, Level.END, LevelStem.END, -5, 4);
 		provider.shutdown();
 		return ok;
 	}
@@ -104,7 +108,8 @@ final class SelfTest {
 					ChunkAccess chunk = level.getChunk(x, z, ChunkStatus.STRUCTURE_STARTS, true);
 					for (Map.Entry<Structure, StructureStart> e : chunk.getAllStarts().entrySet()) {
 						if (e.getValue().isValid()) {
-							result.add(structures.getKey(e.getKey()) + "@" + x + "," + z);
+							String variant = StructureFinder.variantOf(e.getValue());
+							result.add(structures.getKey(e.getKey()) + (variant == null ? "" : "#" + variant) + "@" + x + "," + z);
 						}
 					}
 				}
@@ -114,6 +119,7 @@ final class SelfTest {
 		long t3 = System.nanoTime();
 
 		boolean ok = report(dim + " integrated", predicted, actual) & report(dim + " seed-only", predictedMp, actual);
+		SeedMapClient.LOGGER.info("SELFTEST {}: variants {}", dim.identifier(), actual.stream().filter(k -> k.contains("#")).toList());
 		SeedMapClient.LOGGER.info("SELFTEST {}: {} structures; finder sp {} ms, mp {} ms, vanilla {} ms",
 			dim.identifier(), actual.size(), (t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, (t3 - t2) / 1_000_000);
 		return ok;
@@ -127,7 +133,7 @@ final class SelfTest {
 			for (int tx = minTile; tx <= maxTile; tx++) {
 				for (int tz = minTile; tz <= maxTile; tz++) {
 					for (FoundStructure f : StructureFinder.findInTile(ctx, set, tx, tz)) {
-						result.add(f.structure().identifier() + "@" + f.chunk().x() + "," + f.chunk().z());
+						result.add(f.structure().identifier() + (f.variant() == null ? "" : "#" + f.variant()) + "@" + f.chunk().x() + "," + f.chunk().z());
 					}
 				}
 			}
@@ -153,6 +159,9 @@ final class SelfTest {
 
 	private static void screenshotMap(Minecraft mc) {
 		try {
+			if (Boolean.getBoolean("jm_seedmap.selftest.slime")) {
+				SeedMapConfig.get().showSlimeChunks = true;
+			}
 			featureCheck(mc);
 			Thread.sleep(8_000L);
 			screenshot(mc, "seedmap-minimap.png");
@@ -181,6 +190,8 @@ final class SelfTest {
 				logState(mc);
 				screenshot(mc, "seedmap-journeymap.png");
 			}
+			mc.execute(() -> SeedMapClient.LOGGER.info("SELFTEST seed check: {}", ru.per.jmseedmap.core.SeedMap.get().seedCheck.describe().getString()));
+			Thread.sleep(500L);
 			Optional.ofNullable(System.getProperty("jm_seedmap.selftest.quit")).ifPresent(v -> mc.execute(mc::stop));
 		} catch (InterruptedException ignored) {
 			Thread.currentThread().interrupt();

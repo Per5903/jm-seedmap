@@ -15,6 +15,7 @@ import net.minecraft.world.level.Level;
 import org.jspecify.annotations.Nullable;
 import ru.per.jmseedmap.SeedMapConfig;
 import ru.per.jmseedmap.core.SeedMap;
+import ru.per.jmseedmap.core.SlimeChunks;
 import ru.per.jmseedmap.core.StructureStyles;
 import ru.per.jmseedmap.gen.FoundStructure;
 import ru.per.jmseedmap.map.MapBackend;
@@ -37,6 +38,7 @@ import xaero.map.gui.dropdown.rightclick.RightClickOption;
  */
 public final class XaeroWorldMapBackend implements MapBackend {
 	private @Nullable StructureRenderer renderer;
+	private @Nullable SlimeRenderer slimeRenderer;
 
 	@Override
 	public String name() {
@@ -48,6 +50,8 @@ public final class XaeroWorldMapBackend implements MapBackend {
 		if (renderer == null && WorldMap.mapElementRenderHandler != null) {
 			renderer = new StructureRenderer();
 			WorldMap.mapElementRenderHandler.add(renderer);
+			slimeRenderer = new SlimeRenderer();
+			WorldMap.mapElementRenderHandler.add(slimeRenderer);
 		}
 	}
 
@@ -110,13 +114,13 @@ public final class XaeroWorldMapBackend implements MapBackend {
 			pose.pushPose();
 			pose.scale(iconScale, iconScale, 1.0f);
 			int size = StructureStyles.ICON_SIZE;
-			graphics.blit(StructureStyles.icon(element.id(), seedMap.isDimmed(element)), -size / 2, -size / 2, 0, 0, size, size, size,
+			graphics.blit(StructureStyles.icon(element.displayId(), seedMap.isDimmed(element)), -size / 2, -size / 2, 0, 0, size, size, size,
 				RenderPipelines.GUI_TEXTURED);
 			pose.popPose();
 			SeedMapConfig config = SeedMapConfig.get();
 			if (hovered || (config.showLabels && context.mapScale >= 2.0)) {
 				Font font = Minecraft.getInstance().font;
-				String name = StructureStyles.displayName(element.id());
+				String name = StructureStyles.displayName(element.displayId());
 				int width = font.width(name);
 				graphics.fill(-width / 2 - 2, 11, width / 2 + 2, 21, 0x88000000);
 				graphics.drawString(font, name, -width / 2, 12, seedMap.isDimmed(element) ? 0xFFAAAAAA : 0xFFFFFFFF);
@@ -141,6 +145,225 @@ public final class XaeroWorldMapBackend implements MapBackend {
 		public int getOrder() {
 			// Below waypoints (0) and tracked players (200).
 			return -100;
+		}
+	}
+
+	/** One 512x512 block tile of the slime chunk layer. */
+	record SlimeTile(int tileX, int tileZ, long[] mask) {
+	}
+
+	static final class SlimeContext {
+		List<SlimeTile> tiles = List.of();
+		double mapScale = 1.0;
+		final java.util.Map<String, long[]> masks = new java.util.HashMap<>();
+	}
+
+	/** Translucent green squares on slime chunks, drawn under the structure icons. */
+	static final class SlimeRenderer extends ElementRenderer<SlimeTile, SlimeContext, SlimeRenderer> {
+		SlimeRenderer() {
+			super(new SlimeContext(), new ListProvider<>(c -> c.tiles), new SlimeReader());
+		}
+
+		@Override
+		public void preRender(ElementRenderInfo info, XaeroBufferProvider buffers, MultiTextureRenderTypeRendererProvider renderers, boolean shadow) {
+			context.tiles = List.of();
+			Long seed = SlimeChunks.seedFor(SeedMap.get(), info.mapDimension);
+			if (shadow || seed == null || info.scale < 0.15) {
+				return;
+			}
+			Minecraft mc = Minecraft.getInstance();
+			double halfW = mc.getWindow().getWidth() / 2.0 / info.scale;
+			double halfH = mc.getWindow().getHeight() / 2.0 / info.scale;
+			int minX = Math.floorDiv((int) (info.renderPos.x - halfW), 512);
+			int maxX = Math.floorDiv((int) (info.renderPos.x + halfW), 512);
+			int minZ = Math.floorDiv((int) (info.renderPos.z - halfH), 512);
+			int maxZ = Math.floorDiv((int) (info.renderPos.z + halfH), 512);
+			if (context.masks.size() > 2048) {
+				context.masks.clear();
+			}
+			List<SlimeTile> tiles = new ArrayList<>();
+			for (int tx = minX; tx <= maxX; tx++) {
+				for (int tz = minZ; tz <= maxZ; tz++) {
+					int x = tx;
+					int z = tz;
+					long[] mask = context.masks.computeIfAbsent(seed + "|" + tx + "," + tz, k -> SlimeChunks.tileMask(seed, x, z));
+					tiles.add(new SlimeTile(tx, tz, mask));
+				}
+			}
+			context.tiles = tiles;
+			context.mapScale = info.scale;
+		}
+
+		@Override
+		public void postRender(ElementRenderInfo info, XaeroBufferProvider buffers, MultiTextureRenderTypeRendererProvider renderers, boolean shadow) {
+		}
+
+		@Override
+		public void renderElementShadow(
+			SlimeTile element, boolean hovered, float optionalScale, double partialX, double partialY,
+			ElementRenderInfo info, MapElementGraphics graphics, XaeroBufferProvider buffers, MultiTextureRenderTypeRendererProvider renderers
+		) {
+		}
+
+		@Override
+		public boolean renderElement(
+			SlimeTile element, boolean hovered, double optionalDepth, float optionalScale, double partialX, double partialY,
+			ElementRenderInfo info, MapElementGraphics graphics, XaeroBufferProvider buffers, MultiTextureRenderTypeRendererProvider renderers
+		) {
+			var pose = graphics.pose();
+			pose.pushPose();
+			pose.translate(partialX, partialY, 0.0);
+			// From here on one unit is one block.
+			pose.scale((float) info.scale, (float) info.scale, 1.0f);
+			for (int x = 0; x < 32; x++) {
+				long row = element.mask()[x];
+				if (row == 0) {
+					continue;
+				}
+				for (int z = 0; z < 32; z++) {
+					if ((row >>> z & 1L) != 0) {
+						graphics.fill(x * 16, z * 16, x * 16 + 16, z * 16 + 16, 0x5530E040);
+					}
+				}
+			}
+			pose.popPose();
+			return false;
+		}
+
+		@Override
+		public boolean shouldRender(ElementRenderLocation location, boolean shadow) {
+			return location == ElementRenderLocation.WORLD_MAP && SeedMapConfig.get().showSlimeChunks && SeedMapConfig.get().enabled;
+		}
+
+		@Override
+		public boolean shouldBeDimScaled() {
+			return false;
+		}
+
+		@Override
+		public int getOrder() {
+			return -200;
+		}
+	}
+
+	static final class SlimeReader extends ElementReader<SlimeTile, SlimeContext, SlimeRenderer> {
+		@Override
+		public boolean isHidden(SlimeTile element, SlimeContext context) {
+			return false;
+		}
+
+		@Override
+		public double getRenderX(SlimeTile element, SlimeContext context, float partialTicks) {
+			return element.tileX() * 512.0;
+		}
+
+		@Override
+		public double getRenderZ(SlimeTile element, SlimeContext context, float partialTicks) {
+			return element.tileZ() * 512.0;
+		}
+
+		private static int tilePixels(SlimeContext context) {
+			return (int) Math.ceil(512 * context.mapScale) + 1;
+		}
+
+		@Override
+		public int getInteractionBoxLeft(SlimeTile element, SlimeContext context, float partialTicks) {
+			return 0;
+		}
+
+		@Override
+		public int getInteractionBoxRight(SlimeTile element, SlimeContext context, float partialTicks) {
+			return 0;
+		}
+
+		@Override
+		public int getInteractionBoxTop(SlimeTile element, SlimeContext context, float partialTicks) {
+			return 0;
+		}
+
+		@Override
+		public int getInteractionBoxBottom(SlimeTile element, SlimeContext context, float partialTicks) {
+			return 0;
+		}
+
+		@Override
+		public int getRenderBoxLeft(SlimeTile element, SlimeContext context, float partialTicks) {
+			return -1;
+		}
+
+		@Override
+		public int getRenderBoxRight(SlimeTile element, SlimeContext context, float partialTicks) {
+			return tilePixels(context);
+		}
+
+		@Override
+		public int getRenderBoxTop(SlimeTile element, SlimeContext context, float partialTicks) {
+			return -1;
+		}
+
+		@Override
+		public int getRenderBoxBottom(SlimeTile element, SlimeContext context, float partialTicks) {
+			return tilePixels(context);
+		}
+
+		@Override
+		public int getLeftSideLength(SlimeTile element, Minecraft mc) {
+			return 0;
+		}
+
+		@Override
+		public String getMenuName(SlimeTile element) {
+			return "";
+		}
+
+		@Override
+		public String getFilterName(SlimeTile element) {
+			return "";
+		}
+
+		@Override
+		public int getMenuTextFillLeftPadding(SlimeTile element) {
+			return 0;
+		}
+
+		@Override
+		public int getRightClickTitleBackgroundColor(SlimeTile element) {
+			return 0;
+		}
+
+		@Override
+		public boolean shouldScaleBoxWithOptionalScale() {
+			return false;
+		}
+	}
+
+	/** Iterates whatever list the context currently holds. */
+	static final class ListProvider<E, C> extends ElementRenderProvider<E, C> {
+		private final java.util.function.Function<C, List<E>> list;
+		private @Nullable Iterator<E> iterator;
+
+		ListProvider(java.util.function.Function<C, List<E>> list) {
+			this.list = list;
+		}
+
+		@Override
+		public void begin(ElementRenderLocation location, C context) {
+			iterator = list.apply(context).iterator();
+		}
+
+		@Override
+		public boolean hasNext(ElementRenderLocation location, C context) {
+			return iterator != null && iterator.hasNext();
+		}
+
+		@Override
+		public E getNext(ElementRenderLocation location, C context) {
+			return iterator.next();
+		}
+
+		@Override
+		public void end(ElementRenderLocation location, C context) {
+			iterator = null;
 		}
 	}
 
@@ -231,7 +454,7 @@ public final class XaeroWorldMapBackend implements MapBackend {
 
 		@Override
 		public String getMenuName(FoundStructure element) {
-			return StructureStyles.displayName(element.id());
+			return StructureStyles.displayName(element.displayId());
 		}
 
 		@Override
@@ -246,7 +469,7 @@ public final class XaeroWorldMapBackend implements MapBackend {
 
 		@Override
 		public int getRightClickTitleBackgroundColor(FoundStructure element) {
-			return 0xFF000000 | StructureStyles.style(element.id()).color();
+			return 0xFF000000 | StructureStyles.style(element.displayId()).color();
 		}
 
 		@Override
@@ -302,7 +525,7 @@ public final class XaeroWorldMapBackend implements MapBackend {
 					seedMap.setVisited(element, !visited);
 				}
 			});
-			StructureStyles.Group group = StructureStyles.groupOf(element.id());
+			StructureStyles.Group group = StructureStyles.groupOf(element.displayId());
 			options.add(new RightClickOption(I18n.get("jm_seedmap.menu.hide_type", group.displayName()), options.size(), target) {
 				@Override
 				public void onAction(Screen screen) {

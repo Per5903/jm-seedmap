@@ -150,7 +150,7 @@ public final class XaeroMinimapBackend implements MapBackend {
 			pose.translate(partialX, partialY, 0.0);
 			float scale = optionalScale * 0.5f;
 			pose.scale(scale, scale, 1.0f);
-			Identifier icon = StructureStyles.icon(element.id(), SeedMap.get().isDimmed(element));
+			Identifier icon = StructureStyles.icon(element.displayId(), SeedMap.get().isDimmed(element));
 			int size = StructureStyles.ICON_SIZE;
 			// This blit swaps v1/v2 (the minimap is drawn upside down into its framebuffer).
 			graphics.blit(icon, -size / 2, -size / 2, 0, 0, size, size, size, size, size, RenderPipelines.GUI_TEXTURED);
@@ -269,7 +269,7 @@ public final class XaeroMinimapBackend implements MapBackend {
 
 		@Override
 		public String getMenuName(FoundStructure element) {
-			return StructureStyles.displayName(element.id());
+			return StructureStyles.displayName(element.displayId());
 		}
 
 		@Override
@@ -284,7 +284,7 @@ public final class XaeroMinimapBackend implements MapBackend {
 
 		@Override
 		public int getRightClickTitleBackgroundColor(FoundStructure element) {
-			return 0xFF000000 | StructureStyles.style(element.id()).color();
+			return 0xFF000000 | StructureStyles.style(element.displayId()).color();
 		}
 
 		@Override

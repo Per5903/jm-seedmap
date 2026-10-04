@@ -140,5 +140,21 @@
   "jm_seedmap.cmd.pins_off": "Метки SeedMap скрыты",
   "jm_seedmap.cmd.pins_cleared": "Удалено меток: %s",
   "jm_seedmap.cmd.visited_cleared": "Сброшено посещённых: %s",
-  "jm_seedmap.cmd.visited_mode": "Посещённые: %s"
+  "jm_seedmap.cmd.visited_mode": "Посещённые: %s",
+  "jm_seedmap.structure.minecraft.end_city_ship": "Город Края с кораблём (элитры)",
+  "jm_seedmap.group.end_city_ship": "Города Края с кораблём",
+  "jm_seedmap.opt.slime": "Слайм-чанки",
+  "jm_seedmap.opt.seed_check": "Проверка сида",
+  "jm_seedmap.cmd.slime_on": "Слайм-чанки показаны (только Верхний мир)",
+  "jm_seedmap.cmd.slime_off": "Слайм-чанки скрыты",
+  "jm_seedmap.cmd.slime_yes": "Чанк %s, %s — слаймовый ✔",
+  "jm_seedmap.cmd.slime_no": "Чанк %s, %s — не слаймовый",
+  "jm_seedmap.cmd.slime_overworld": "Слайм-чанки есть только в Верхнем мире",
+  "jm_seedmap.check.ok": "[SeedMap] Сид подтверждён: биомы совпадают на %s%%",
+  "jm_seedmap.check.suspect": "[SeedMap] Сид под вопросом: биомы совпадают лишь на %s%%. Проверь тип мира (/seedmap preset) или версию сервера",
+  "jm_seedmap.check.wrong": "[SeedMap] Похоже, сид неверный: биомы совпадают на %s%%. Структуры на карте не настоящие",
+  "jm_seedmap.check.status_unknown": "Проверка сида: собираю данные (%s из %s)",
+  "jm_seedmap.check.status_ok": "Проверка сида: ✔ совпадение %s%% (%s проб)",
+  "jm_seedmap.check.status_suspect": "Проверка сида: ? совпадение %s%% (%s проб)",
+  "jm_seedmap.check.status_wrong": "Проверка сида: ✘ совпадение %s%% (%s проб)"
 }

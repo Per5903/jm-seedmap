@@ -86,6 +86,8 @@ public final class StructureStyles {
 		put("bastion_remnant", new Style("block/gilded_blackstone", 0x2B2B2B, true));
 		put("nether_fossil", new Style("item/bone", 0xD8D2B8, false));
 		put("end_city", new Style("item/shulker_shell", 0xA070A8, true));
+		// Variant: End city that has the elytra ship (see FoundStructure#displayId).
+		put("end_city_ship", new Style("item/elytra", 0xE0A030, true));
 
 		group("village", "village_plains", "village_desert", "village_savanna", "village_snowy", "village_taiga");
 		group("pillager_outpost", "pillager_outpost");
@@ -109,6 +111,17 @@ public final class StructureStyles {
 		group("bastion_remnant", "bastion_remnant");
 		group("nether_fossil", "nether_fossil");
 		group("end_city", "end_city");
+		group("end_city_ship", "end_city_ship");
+	}
+
+	/** Display ids of the variants a structure can produce, e.g. end_city -> end_city_ship. */
+	public static List<String> variants(String structureId) {
+		return structureId.equals("minecraft:end_city") ? List.of("minecraft:end_city_ship") : List.of();
+	}
+
+	/** Whether a structure or any of its variants passes the filter: decides if its set needs computing at all. */
+	public static boolean anyVariant(String structureId, java.util.function.Predicate<String> filter) {
+		return filter.test(structureId) || variants(structureId).stream().anyMatch(filter);
 	}
 
 	private static void group(String key, String... vanillaPaths) {

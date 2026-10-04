@@ -14,6 +14,10 @@ loom {
 				vmArg "-Djm_seedmap.selftest=true"
 				vmArg "-Djm_seedmap.selftest.screenshot=true"
 				vmArg "-Djm_seedmap.selftest.quit=true"
+				vmArg "-Djm_seedmap.selftest.slime=true"
+				if (project.hasProperty("seed")) {
+					vmArg "-Djm_seedmap.selftest.seed=${project.property('seed')}"
+				}
 				if (project.hasProperty("mp")) {
 					programArgs "--quickPlayMultiplayer", "localhost:25599"
 				} else {

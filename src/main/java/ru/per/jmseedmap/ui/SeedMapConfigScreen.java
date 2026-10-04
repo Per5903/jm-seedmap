@@ -42,6 +42,9 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 		list.addSmall(
 			toggle("jm_seedmap.opt.minimap", c.showOnMinimap, v -> c.showOnMinimap = v),
 			toggle("jm_seedmap.opt.worldmap", c.showOnWorldMap, v -> c.showOnWorldMap = v));
+		list.addSmall(
+			toggle("jm_seedmap.opt.slime", c.showSlimeChunks, v -> c.showSlimeChunks = v),
+			toggle("jm_seedmap.opt.seed_check", c.seedCheck, v -> c.seedCheck = v));
 
 		list.addHeader(Component.translatable("jm_seedmap.screen.waypoints"));
 		list.addSmall(
@@ -79,6 +82,12 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			seedBox.setValue(seed == null ? "" : Long.toString(seed));
 			seedBox.setHint(Component.translatable("jm_seedmap.screen.seed_hint"));
 			list.addSmall(seedBox, Button.builder(Component.translatable("jm_seedmap.screen.seed_save"), b -> saveSeed(key)).build());
+		}
+		if (mc.level != null) {
+			// Seed check result: a non-interactive full-width line.
+			Button check = Button.builder(SeedMap.get().seedCheck.describe(), b -> { }).width(310).build();
+			check.active = false;
+			list.addBig(check);
 		}
 
 		list.addHeader(Component.translatable("jm_seedmap.screen.structures"));

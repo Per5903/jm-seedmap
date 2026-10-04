@@ -5,7 +5,9 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import journeymap.api.v2.client.IClientAPI;
+import com.mojang.blaze3d.platform.NativeImage;
 import journeymap.api.v2.client.display.IOverlayListener;
+import journeymap.api.v2.client.display.ImageOverlay;
 import journeymap.api.v2.client.display.MarkerOverlay;
 import journeymap.api.v2.client.fullscreen.ModPopupMenu;
 import journeymap.api.v2.client.model.MapImage;
@@ -17,11 +19,14 @@ import journeymap.api.v2.common.waypoint.WaypointGroup;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import org.jspecify.annotations.Nullable;
 import ru.per.jmseedmap.SeedMapClient;
 import ru.per.jmseedmap.SeedMapConfig;
 import ru.per.jmseedmap.core.SeedMap;
+import ru.per.jmseedmap.core.SlimeChunks;
 import ru.per.jmseedmap.core.StructureStyles;
 import ru.per.jmseedmap.core.WorldData;
 import ru.per.jmseedmap.gen.FoundStructure;
@@ -36,6 +41,8 @@ public final class JourneyMapBackend implements MapBackend {
 
 	private final IClientAPI api;
 	private final Map<String, MarkerOverlay> shown = new HashMap<>();
+	/** Slime chunk overlays, one 32x32 image per 512x512 tile. */
+	private final Map<String, ImageOverlay> slimeShown = new HashMap<>();
 	private int ticks;
 	private int shownRevision = -1;
 	private int shownPins = -1;
@@ -57,6 +64,7 @@ public final class JourneyMapBackend implements MapBackend {
 			return;
 		}
 		syncPins(seedMap);
+		syncSlime(seedMap);
 		SeedMapConfig config = SeedMapConfig.get();
 		if (!config.enabled) {
 			hideAll();
@@ -107,7 +115,7 @@ public final class JourneyMapBackend implements MapBackend {
 
 	private @Nullable MarkerOverlay createOverlay(SeedMap seedMap, FoundStructure structure) {
 		SeedMapConfig config = SeedMapConfig.get();
-		String id = structure.id();
+		String id = structure.displayId();
 		String name = StructureStyles.displayName(id);
 		BlockPos pos = structure.pos();
 		boolean dimmed = seedMap.isDimmed(structure);
@@ -149,7 +157,7 @@ public final class JourneyMapBackend implements MapBackend {
 		@Override
 		public void onOverlayMenuPopup(UIState mapState, Point2D.Double mousePosition, BlockPos blockPosition, ModPopupMenu menu) {
 			SeedMap seedMap = SeedMap.get();
-			String name = StructureStyles.displayName(structure.id());
+			String name = StructureStyles.displayName(structure.displayId());
 			boolean pinned = seedMap.isPinned(structure);
 			menu.addMenuItem(I18n.get(pinned ? "jm_seedmap.menu.unpin" : "jm_seedmap.menu.pin", name),
 				clicked -> seedMap.setPinned(structure, !pinned));
@@ -157,8 +165,8 @@ public final class JourneyMapBackend implements MapBackend {
 			boolean visited = seedMap.isVisited(structure);
 			menu.addMenuItem(I18n.get(visited ? "jm_seedmap.menu.unvisit" : "jm_seedmap.menu.visit"),
 				clicked -> seedMap.setVisited(structure, !visited));
-			menu.addMenuItem(I18n.get("jm_seedmap.menu.hide_type", StructureStyles.groupOf(structure.id()).displayName()), clicked -> {
-				StructureStyles.groupOf(structure.id()).setEnabled(false);
+			menu.addMenuItem(I18n.get("jm_seedmap.menu.hide_type", StructureStyles.groupOf(structure.displayId()).displayName()), clicked -> {
+				StructureStyles.groupOf(structure.displayId()).setEnabled(false);
 				SeedMapConfig.save();
 				seedMap.invalidateVisuals();
 			});
@@ -189,6 +197,73 @@ public final class JourneyMapBackend implements MapBackend {
 			waypoint.setColor(pin.color());
 			group.addWaypoint(waypoint);
 			api.addWaypoint(SeedMapClient.MOD_ID, waypoint);
+		}
+	}
+
+	private void syncSlime(SeedMap seedMap) {
+		Map<String, SlimeTile> wanted = new HashMap<>();
+		for (Context.UI ui : new Context.UI[]{Context.UI.Fullscreen, Context.UI.Minimap}) {
+			UIState state = api.getUIState(ui);
+			if (state == null || !state.active || state.blockBounds == null || state.dimension == null) {
+				continue;
+			}
+			Long seed = SlimeChunks.seedFor(seedMap, state.dimension);
+			if (seed == null) {
+				continue;
+			}
+			AABB b = state.blockBounds;
+			int cx = Math.floorDiv((int) ((b.minX + b.maxX) / 2), 512);
+			int cz = Math.floorDiv((int) ((b.minZ + b.maxZ) / 2), 512);
+			int minX = Math.max(Math.floorDiv((int) b.minX, 512), cx - 6);
+			int maxX = Math.min(Math.floorDiv((int) b.maxX, 512), cx + 6);
+			int minZ = Math.max(Math.floorDiv((int) b.minZ, 512), cz - 6);
+			int maxZ = Math.min(Math.floorDiv((int) b.maxZ, 512), cz + 6);
+			for (int tx = minX; tx <= maxX; tx++) {
+				for (int tz = minZ; tz <= maxZ; tz++) {
+					wanted.put(state.dimension.identifier() + "|" + seed + "|" + tx + "," + tz, new SlimeTile(state.dimension, seed, tx, tz));
+				}
+			}
+		}
+		Iterator<Map.Entry<String, ImageOverlay>> it = slimeShown.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<String, ImageOverlay> entry = it.next();
+			if (!wanted.containsKey(entry.getKey())) {
+				api.remove(entry.getValue());
+				it.remove();
+			}
+		}
+		for (Map.Entry<String, SlimeTile> entry : wanted.entrySet()) {
+			if (!slimeShown.containsKey(entry.getKey())) {
+				showSlimeTile(entry.getKey(), entry.getValue());
+			}
+		}
+	}
+
+	private record SlimeTile(ResourceKey<Level> dimension, long seed, int tileX, int tileZ) {
+	}
+
+	private void showSlimeTile(String key, SlimeTile tile) {
+		int tx = tile.tileX();
+		int tz = tile.tileZ();
+		long[] mask = SlimeChunks.tileMask(tile.seed(), tx, tz);
+		NativeImage image = new NativeImage(32, 32, true);
+		for (int x = 0; x < 32; x++) {
+			for (int z = 0; z < 32; z++) {
+				if ((mask[x] >>> z & 1L) != 0) {
+					image.setPixel(x, z, 0x6630E040);
+				}
+			}
+		}
+		MapImage mapImage = new MapImage(image).setBlur(false);
+		ImageOverlay overlay = new ImageOverlay(SeedMapClient.MOD_ID, new BlockPos(tx * 512, 64, tz * 512),
+			new BlockPos(tx * 512 + 512, 64, tz * 512 + 512), mapImage);
+		overlay.setDimension(tile.dimension()).setOverlayGroupName("SeedMap slime").setDisplayOrder(-100);
+		try {
+			api.show(overlay);
+			slimeShown.put(key, overlay);
+		} catch (Exception e) {
+			SeedMapClient.LOGGER.warn("JourneyMap refused slime overlay", e);
+			image.close();
 		}
 	}
 

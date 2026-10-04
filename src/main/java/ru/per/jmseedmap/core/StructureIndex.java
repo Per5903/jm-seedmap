@@ -87,6 +87,11 @@ public final class StructureIndex {
 		return status != null ? status : contexts.get(dimension).status();
 	}
 
+	/** The ready generator context for a dimension, or null while loading / without a seed. */
+	public @Nullable GenContext context(ResourceKey<Level> dimension) {
+		return contexts.get(dimension).context();
+	}
+
 	public int pendingTiles() {
 		return pending.size();
 	}
@@ -156,7 +161,7 @@ public final class StructureIndex {
 				continue;
 			}
 			for (StructureSet.StructureSelectionEntry entry : set.value().structures()) {
-				if (entry.structure().unwrapKey().map(k -> structureFilter.test(k.identifier().toString())).orElse(false)) {
+				if (entry.structure().unwrapKey().map(k -> StructureStyles.anyVariant(k.identifier().toString(), structureFilter)).orElse(false)) {
 					sets.add(set);
 					break;
 				}
@@ -214,7 +219,7 @@ public final class StructureIndex {
 					}
 					for (FoundStructure s : tileResults) {
 						if (s.pos().getX() >= minX && s.pos().getX() <= maxX && s.pos().getZ() >= minZ && s.pos().getZ() <= maxZ
-							&& StructureStyles.isEnabled(s.id())) {
+							&& StructureStyles.isEnabled(s.displayId())) {
 							out.add(s);
 						}
 					}
@@ -258,7 +263,7 @@ public final class StructureIndex {
 							}
 							for (FoundStructure s : found) {
 								double d = s.distanceSqr(x, z);
-								if (d < bestDist && filter.test(s.id()) && accept.test(s)) {
+								if (d < bestDist && filter.test(s.displayId()) && accept.test(s)) {
 									best = s;
 									bestDist = d;
 								}
