@@ -18,7 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.per.jmseedmap.core.SeedMap;
 import ru.per.jmseedmap.gen.GenContextProvider;
-import ru.per.jmseedmap.ui.NearestScreen;
+import ru.per.jmseedmap.ui.SearchScreen;
 import ru.per.jmseedmap.ui.SeedMapConfigScreen;
 
 public final class SeedMapClient implements ClientModInitializer {
@@ -54,7 +54,7 @@ public final class SeedMapClient implements ClientModInitializer {
 				seedMap.toggleLayer();
 			}
 			while (nearestKey.consumeClick()) {
-				client.gui.setScreen(new NearestScreen(null));
+				client.gui.setScreen(new SearchScreen(null));
 			}
 			while (settingsKey.consumeClick()) {
 				client.gui.setScreen(new SeedMapConfigScreen(null));

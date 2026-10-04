@@ -63,17 +63,39 @@ final class SelfTest {
 	private static boolean run(Minecraft mc) throws Exception {
 		IntegratedServer server = mc.getSingleplayerServer();
 		if (server == null) {
-			// Multiplayer: behave like a player typing /seedmap seed <seed>, then let the map fill.
-			long seed = Long.getLong("jm_seedmap.selftest.seed", 12345L);
-			mc.execute(() -> mc.player.connection.sendCommand("seedmap seed " + seed));
+			// Multiplayer: forget the seed, recover it from the server's hash, then check it.
+			var seedMap = ru.per.jmseedmap.core.SeedMap.get();
+			String serverKey = GenContextProvider.serverKey();
+			SeedMapConfig.get().seeds.remove(serverKey);
+			mc.execute(seedMap::resetStructures);
 			Thread.sleep(2_000L);
-			boolean ok = Long.valueOf(seed).equals(SeedMapConfig.get().seeds.get(GenContextProvider.serverKey()));
-			SeedMapClient.LOGGER.info("SELFTEST multiplayer seed stored for {}: {}", GenContextProvider.serverKey(), ok);
-			Thread.sleep(40_000L);
-			mc.execute(() -> SeedMapClient.LOGGER.info("SELFTEST seed check (seed {}): {}", seed,
-				ru.per.jmseedmap.core.SeedMap.get().seedCheck.describe().getString()));
-			Thread.sleep(500L);
-			return ok;
+			mc.execute(() -> seedMap.startSeedSearch(null));
+			for (int i = 0; i < 600 && SeedMapConfig.get().seeds.get(serverKey) == null; i++) {
+				Thread.sleep(500L);
+				if (i % 20 == 0) {
+					SeedMapClient.LOGGER.info("SELFTEST finder: {}% after {} s, {} seeds", seedMap.seedFinder.progress(),
+						seedMap.seedFinder.elapsedMillis() / 1000, seedMap.seedFinder.checked());
+				}
+			}
+			Long found = SeedMapConfig.get().seeds.get(serverKey);
+			SeedMapClient.LOGGER.info("SELFTEST finder found {} in {} ms ({} seeds checked)", found, seedMap.seedFinder.elapsedMillis(),
+				seedMap.seedFinder.checked());
+			Thread.sleep(15_000L);
+			mc.execute(() -> seedMap.seedCheck.run(mc, seedMap.index, false));
+			Thread.sleep(1_000L);
+			mc.execute(() -> SeedMapClient.LOGGER.info("SELFTEST seed check: {}", seedMap.seedCheck.describe().getString()));
+			if (found != null) {
+				long structureSeed = found & ((1L << 48) - 1);
+				SeedMapConfig.get().seeds.remove(serverKey);
+				mc.execute(() -> seedMap.startSeedSearch(structureSeed));
+				for (int i = 0; i < 60 && SeedMapConfig.get().seeds.get(serverKey) == null; i++) {
+					Thread.sleep(250L);
+				}
+				SeedMapClient.LOGGER.info("SELFTEST structure-seed finder found {} in {} ms", SeedMapConfig.get().seeds.get(serverKey),
+					seedMap.seedFinder.elapsedMillis());
+			}
+			Thread.sleep(1_000L);
+			return found != null;
 		}
 		GenContextProvider provider = new GenContextProvider(Executors.newFixedThreadPool(2));
 		boolean ok = true;
@@ -165,6 +187,7 @@ final class SelfTest {
 			featureCheck(mc);
 			Thread.sleep(8_000L);
 			screenshot(mc, "seedmap-minimap.png");
+			uiScreenshots(mc);
 			if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
 				mc.execute(() -> openXaeroWorldMap(mc));
 				Thread.sleep(Long.getLong("jm_seedmap.selftest.wait", 15_000L));
@@ -196,6 +219,47 @@ final class SelfTest {
 		} catch (InterruptedException ignored) {
 			Thread.currentThread().interrupt();
 		}
+	}
+
+	/** Biome search plus screenshots of every settings tab and the search screen. */
+	private static void uiScreenshots(Minecraft mc) throws InterruptedException {
+		var seedMap = ru.per.jmseedmap.core.SeedMap.get();
+		mc.execute(() -> seedMap.findNearestBiome(net.minecraft.resources.Identifier.withDefaultNamespace("mushroom_fields"), "mushroom fields"));
+		Thread.sleep(20_000L);
+		SeedMapClient.LOGGER.info("SELFTEST nearest biome target: {}", seedMap.world() == null ? null : seedMap.world().target());
+		String[] tabs = {"MAP", "STRUCTURES", "WAYPOINTS", "SEED"};
+		for (String tab : tabs) {
+			mc.execute(() -> {
+				try {
+					var field = ru.per.jmseedmap.ui.SeedMapConfigScreen.class.getDeclaredField("tab");
+					field.setAccessible(true);
+					Class<?> tabType = field.getType();
+					field.set(null, Enum.valueOf(tabType.asSubclass(Enum.class), tab));
+				} catch (ReflectiveOperationException e) {
+					SeedMapClient.LOGGER.error("SELFTEST tab switch failed", e);
+				}
+				mc.gui.setScreen(new ru.per.jmseedmap.ui.SeedMapConfigScreen(null));
+			});
+			Thread.sleep(1_500L);
+			screenshot(mc, "seedmap-settings-" + tab.toLowerCase(java.util.Locale.ROOT) + ".png");
+		}
+		mc.execute(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.SearchScreen(null)));
+		Thread.sleep(1_500L);
+		screenshot(mc, "seedmap-search.png");
+		mc.execute(() -> {
+			try {
+				var field = ru.per.jmseedmap.ui.SearchScreen.class.getDeclaredField("biomesTab");
+				field.setAccessible(true);
+				field.setBoolean(null, true);
+			} catch (ReflectiveOperationException e) {
+				SeedMapClient.LOGGER.error("SELFTEST biome tab failed", e);
+			}
+			mc.gui.setScreen(new ru.per.jmseedmap.ui.SearchScreen(null));
+		});
+		Thread.sleep(1_500L);
+		screenshot(mc, "seedmap-search-biomes.png");
+		mc.execute(() -> mc.gui.setScreen(null));
+		Thread.sleep(500L);
 	}
 
 	/** Exercises nearest search, pins and visited marks the way the UI does. */

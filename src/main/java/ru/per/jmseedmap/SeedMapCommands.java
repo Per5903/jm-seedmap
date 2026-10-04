@@ -4,6 +4,7 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
@@ -17,6 +18,7 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.IdentifierArgument;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
@@ -44,6 +46,11 @@ public final class SeedMapCommands {
 			StructureStyles.groups().forEach(g -> ids.add(g.key()));
 			ids.add("all");
 			return SharedSuggestionProvider.suggest(ids, builder);
+		};
+		SuggestionProvider<FabricClientCommandSource> biomes = (ctx, builder) -> {
+			Minecraft mc = ctx.getSource().getClient();
+			return SharedSuggestionProvider.suggestResource(
+				mc.level == null ? List.of() : SeedMap.get().index.possibleBiomes(mc.level.dimension()), builder);
 		};
 		SuggestionProvider<FabricClientCommandSource> groups = (ctx, builder) ->
 			SharedSuggestionProvider.suggest(StructureStyles.groups().stream().map(StructureStyles.Group::key), builder);
@@ -80,6 +87,8 @@ public final class SeedMapCommands {
 					.executes(ctx -> setStructure(ctx, false))))
 			.then(literal("list").executes(SeedMapCommands::list))
 			.then(literal("nearest")
+				.then(literal("biome")
+					.then(argument("biome", IdentifierArgument.id()).suggests(biomes).executes(SeedMapCommands::nearestBiome)))
 				.then(argument("type", StringArgumentType.word()).suggests(groups).executes(SeedMapCommands::nearest)))
 			.then(literal("target")
 				.then(literal("clear").executes(ctx -> {
@@ -110,7 +119,28 @@ public final class SeedMapCommands {
 				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = false, "jm_seedmap.cmd.slime_off")))
 				.then(literal("here").executes(SeedMapCommands::slimeHere)))
 			.then(literal("check").executes(ctx -> {
-				ctx.getSource().sendFeedback(SeedMap.get().seedCheck.describe());
+				SeedMap.get().seedCheck.run(ctx.getSource().getClient(), SeedMap.get().index, false);
+				return 1;
+			}))
+			.then(literal("find")
+				.executes(ctx -> {
+					SeedMap.get().startSeedSearch(null);
+					return 1;
+				})
+				.then(literal("structure")
+					.then(argument("structureSeed", LongArgumentType.longArg()).executes(ctx -> {
+						SeedMap.get().startSeedSearch(LongArgumentType.getLong(ctx, "structureSeed"));
+						return 1;
+					})))
+				.then(literal("stop").executes(ctx -> {
+					SeedMap.get().seedFinder.cancel();
+					ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.find.stopped"));
+					return 1;
+				}))
+				.then(literal("status").executes(SeedMapCommands::findStatus)))
+			.then(literal("search").executes(ctx -> {
+				Minecraft mc = ctx.getSource().getClient();
+				mc.schedule(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.SearchScreen(null)));
 				return 1;
 			}))
 			.then(literal("reload").executes(ctx -> {
@@ -174,6 +204,7 @@ public final class SeedMapCommands {
 		SeedMapConfig.get().seeds.put(key, seed.getAsLong());
 		SeedMapConfig.save();
 		SeedMap.get().resetStructures();
+		SeedMap.get().scheduleSeedCheck();
 		source.sendFeedback(Component.translatable("jm_seedmap.cmd.seed_set", seedComponent(seed.getAsLong()), key));
 		return 1;
 	}
@@ -261,6 +292,24 @@ public final class SeedMapCommands {
 		}
 		StructureStyles.Group target = group;
 		SeedMap.get().findNearest(target::contains, target.displayName());
+		return 1;
+	}
+
+	private static int nearestBiome(CommandContext<FabricClientCommandSource> ctx) {
+		net.minecraft.resources.Identifier id = ctx.getArgument("biome", net.minecraft.resources.Identifier.class);
+		SeedMap.get().findNearestBiome(id, ru.per.jmseedmap.ui.SearchScreen.biomeNameOf(id));
+		return 1;
+	}
+
+	private static int findStatus(CommandContext<FabricClientCommandSource> ctx) {
+		var finder = SeedMap.get().seedFinder;
+		if (finder.isRunning()) {
+			ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.find.progress", finder.progress(), finder.elapsedMillis() / 1000));
+		} else if (finder.found() != null) {
+			ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.find.done", finder.found()));
+		} else {
+			ctx.getSource().sendFeedback(Component.translatable(finder.finished() ? "jm_seedmap.find.idle_none" : "jm_seedmap.find.idle"));
+		}
 		return 1;
 	}
 

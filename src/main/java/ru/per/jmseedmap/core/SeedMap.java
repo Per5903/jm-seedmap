@@ -35,6 +35,9 @@ public final class SeedMap {
 
 	public final StructureIndex index = new StructureIndex();
 	public final SeedCheck seedCheck = new SeedCheck();
+	public final SeedFinder seedFinder = new SeedFinder();
+	/** Tick at which to run a one-off seed check (after a seed was entered or found), or -1. */
+	private int checkAt = -1;
 	private final List<MapBackend> backends = new CopyOnWriteArrayList<>();
 	private @Nullable WorldData world;
 	private @Nullable String worldKey;
@@ -104,8 +107,11 @@ public final class SeedMap {
 		if (ticks % 10 == 0) {
 			trackVisits(mc, player, config);
 		}
-		if (ticks % 100 == 0 && config.seedCheck) {
-			seedCheck.tick(mc, index);
+		if (checkAt >= 0 && ticks >= checkAt) {
+			checkAt = -1;
+			seedCheck.run(mc, index, false);
+		} else if (ticks % 200 == 0 && config.seedCheckAuto) {
+			seedCheck.run(mc, index, true);
 		}
 		if (ticks % 200 == 0 && world != null) {
 			world.saveIfDirty();
@@ -140,7 +146,9 @@ public final class SeedMap {
 		world = null;
 		worldKey = null;
 		index.reset();
-		seedCheck.reset("");
+		seedCheck.reset();
+		seedFinder.cancel();
+		checkAt = -1;
 		pinsRevision++;
 		revision++;
 	}
@@ -298,6 +306,98 @@ public final class SeedMap {
 		return names[(int) Math.floorMod(Math.round(angle / 45.0), 8L)].toLowerCase(Locale.ROOT);
 	}
 
+	/** Check the seed in ~10 seconds, when the generator is ready and chunks are loaded. */
+	public void scheduleSeedCheck() {
+		checkAt = ticks + 200;
+	}
+
+	// ---- seed finding ----
+
+	/**
+	 * Starts recovering this server's seed from the hash it sends. Reports progress and the result in chat;
+	 * a found seed is saved for the server like a typed one.
+	 *
+	 * @param structureSeed lower 48 bits if known (e.g. from SeedCrackerX), otherwise null for the 32-bit search
+	 */
+	public void startSeedSearch(@Nullable Long structureSeed) {
+		Minecraft mc = Minecraft.getInstance();
+		LocalPlayer player = mc.player;
+		if (player == null) {
+			return;
+		}
+		if (mc.getSingleplayerServer() != null) {
+			player.sendSystemMessage(Component.translatable("jm_seedmap.cmd.sp_auto"));
+			return;
+		}
+		java.util.OptionalLong hashed = SeedCheck.serverHashedSeed(mc.level);
+		if (hashed.isEmpty()) {
+			player.sendSystemMessage(Component.translatable("jm_seedmap.find.no_hash").withStyle(ChatFormatting.RED));
+			return;
+		}
+		String serverKey = GenContextProvider.serverKey();
+		SeedFinder.Mode mode = structureSeed == null ? SeedFinder.Mode.INT32 : SeedFinder.Mode.STRUCTURE_SEED;
+		boolean started = seedFinder.start(mode, hashed.getAsLong(), structureSeed == null ? 0 : structureSeed,
+			seed -> mc.execute(() -> onSeedFound(serverKey, seed)),
+			() -> mc.execute(() -> {
+				if (mc.player != null) {
+					mc.player.sendSystemMessage(Component.translatable(mode == SeedFinder.Mode.INT32
+						? "jm_seedmap.find.not_found_int" : "jm_seedmap.find.not_found_structure").withStyle(ChatFormatting.YELLOW));
+				}
+			}));
+		player.sendSystemMessage(Component.translatable(started
+			? (mode == SeedFinder.Mode.INT32 ? "jm_seedmap.find.started_int" : "jm_seedmap.find.started_structure")
+			: "jm_seedmap.find.already"));
+	}
+
+	private void onSeedFound(String serverKey, long seed) {
+		SeedMapConfig.get().seeds.put(serverKey, seed);
+		SeedMapConfig.save();
+		resetStructures();
+		scheduleSeedCheck();
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (player != null) {
+			String text = Long.toString(seed);
+			player.sendSystemMessage(Component.translatable("jm_seedmap.find.found",
+					Component.literal(text).withStyle(style -> style.withColor(ChatFormatting.GREEN)
+						.withClickEvent(new net.minecraft.network.chat.ClickEvent.CopyToClipboard(text))),
+					seedFinder.elapsedMillis() / 1000)
+				.withStyle(ChatFormatting.AQUA));
+		}
+	}
+
+	// ---- biomes ----
+
+	public void findNearestBiome(net.minecraft.resources.Identifier biome, String label) {
+		Minecraft mc = Minecraft.getInstance();
+		LocalPlayer player = mc.player;
+		if (player == null || mc.level == null) {
+			return;
+		}
+		ResourceKey<Level> dim = mc.level.dimension();
+		player.sendOverlayMessage(Component.translatable("jm_seedmap.msg.searching", label));
+		index.nearestBiome(dim, player.blockPosition(), biome, mc.level).whenComplete((result, error) -> mc.execute(() -> {
+			LocalPlayer p = mc.player;
+			if (p == null) {
+				return;
+			}
+			if (error != null || result.isEmpty()) {
+				p.sendSystemMessage(Component.translatable("jm_seedmap.msg.biome_not_found", label).withStyle(ChatFormatting.YELLOW));
+				return;
+			}
+			net.minecraft.core.BlockPos pos = result.get();
+			if (world != null) {
+				world.addPin(new WorldData.Pin("biome|" + dim.identifier() + "|" + biome, dim.identifier().toString(),
+					pos.getX(), pos.getY(), pos.getZ(), "biome:" + biome, "→ " + label, 0x4FA3E0, true));
+				pinsRevision++;
+			}
+			double dx = pos.getX() + 0.5 - p.getX();
+			double dz = pos.getZ() + 0.5 - p.getZ();
+			int distance = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
+			p.sendSystemMessage(Component.translatable("jm_seedmap.msg.nearest", label, distance,
+				Component.translatable("jm_seedmap.dir." + direction(dx, dz)), pos.getX(), pos.getZ()).withStyle(ChatFormatting.AQUA));
+		}));
+	}
+
 	// ---- layer ----
 
 	public void toggleLayer() {
@@ -314,7 +414,7 @@ public final class SeedMap {
 	/** After seed/preset change: recompute everything. */
 	public void resetStructures() {
 		index.reset();
-		seedCheck.reset("");
+		seedCheck.reset();
 		revision++;
 	}
 }

@@ -281,6 +281,37 @@ public final class StructureIndex {
 		}, search);
 	}
 
+	/**
+	 * Closest biome with this id around {@code origin}, the same search as {@code /locate biome}
+	 * (6400 blocks, every 32 blocks horizontally, every 64 vertically).
+	 */
+	public CompletableFuture<Optional<net.minecraft.core.BlockPos>> nearestBiome(
+		ResourceKey<Level> dimension, net.minecraft.core.BlockPos origin, Identifier biome, net.minecraft.world.level.LevelReader heights
+	) {
+		return CompletableFuture.supplyAsync(() -> {
+			GenContext ctx = awaitContext(dimension);
+			if (ctx == null) {
+				return Optional.empty();
+			}
+			var result = ctx.generator().getBiomeSource().findClosestBiome3d(origin, 6400, 32, 64,
+				holder -> holder.unwrapKey().map(k -> k.identifier().equals(biome)).orElse(false), ctx.randomState().sampler(), heights);
+			return Optional.ofNullable(result).map(com.mojang.datafixers.util.Pair::getFirst);
+		}, search);
+	}
+
+	/** Biomes the generator of {@code dimension} can produce, or empty while unknown. */
+	public List<Identifier> possibleBiomes(ResourceKey<Level> dimension) {
+		GenContext ctx = context(dimension);
+		if (ctx == null) {
+			return List.of();
+		}
+		List<Identifier> ids = new ArrayList<>();
+		for (var holder : ctx.generator().getBiomeSource().possibleBiomes()) {
+			holder.unwrapKey().ifPresent(k -> ids.add(k.identifier()));
+		}
+		return ids;
+	}
+
 	private @Nullable GenContext awaitContext(ResourceKey<Level> dimension) {
 		for (int i = 0; i < 600; i++) {
 			GenContextProvider.Lookup lookup = contexts.get(dimension);

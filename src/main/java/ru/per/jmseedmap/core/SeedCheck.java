@@ -1,6 +1,8 @@
 package ru.per.jmseedmap.core;
 
+import java.lang.reflect.Field;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Random;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -10,46 +12,68 @@ import net.minecraft.core.QuartPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeManager;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
+import org.jspecify.annotations.Nullable;
 import ru.per.jmseedmap.gen.GenContext;
 
 /**
- * Verifies the seed against reality: the server sends real biomes with every chunk, so comparing them with
- * the biomes the seed predicts tells whether the seed, world type and version are right, long before
- * anyone walks to a wrong structure. Only biomes are compared, nothing is sent anywhere.
+ * Tells whether the seed in use is the server's real seed, on demand.
+ * <ol>
+ *   <li>The server sends a SHA-256 hash of its seed (used for biome blending). If it is there, comparing it
+ *       with the hash of our seed is an exact yes/no.</li>
+ *   <li>Real biomes of loaded chunks are compared with the biomes the seed predicts. This catches a wrong
+ *       world type or version and still works when the server hides or fakes the hash.</li>
+ * </ol>
+ * Nothing is sent anywhere.
  */
 public final class SeedCheck {
 	public enum Verdict { UNKNOWN, OK, SUSPECT, WRONG }
 
-	private static final int WINDOW = 240;
-	private static final int MIN_SAMPLES = 48;
-	private static final int SAMPLES_PER_RUN = 16;
+	private static final int SAMPLES = 256;
+	private static final @Nullable Field ZOOM_SEED = zoomSeedField();
 
-	private final boolean[] window = new boolean[WINDOW];
 	private final Random random = new Random();
-	private int size;
-	private int next;
-	private int matches;
-	private String contextId = "";
 	private Verdict verdict = Verdict.UNKNOWN;
-	private Verdict announced = Verdict.UNKNOWN;
+	private int percent = -1;
+	private int samples;
+	private @Nullable Boolean hashMatch;
+	private String contextId = "";
+
+	private static @Nullable Field zoomSeedField() {
+		try {
+			Field field = BiomeManager.class.getDeclaredField("biomeZoomSeed");
+			field.setAccessible(true);
+			return field;
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	/** The hashed seed the server sent, if any (some servers send 0 to hide it). */
+	public static OptionalLong serverHashedSeed(@Nullable ClientLevel level) {
+		if (level == null || ZOOM_SEED == null) {
+			return OptionalLong.empty();
+		}
+		try {
+			long hashed = ZOOM_SEED.getLong(level.getBiomeManager());
+			return hashed == 0 ? OptionalLong.empty() : OptionalLong.of(hashed);
+		} catch (IllegalAccessException e) {
+			return OptionalLong.empty();
+		}
+	}
 
 	public Verdict verdict() {
 		return verdict;
 	}
 
-	/** Share of matching samples in percent, or -1 before there is enough data. */
-	public int percent() {
-		return size < MIN_SAMPLES ? -1 : Math.round(matches * 100f / size);
-	}
-
-	public int samples() {
-		return size;
-	}
-
-	/** Every ~5 seconds on the render thread. */
-	void tick(Minecraft mc, StructureIndex index) {
+	/**
+	 * Runs the check now on the render thread and reports in chat.
+	 *
+	 * @param quietIfUnchanged only report when the verdict differs from the previous one (automatic mode)
+	 */
+	public void run(Minecraft mc, StructureIndex index, boolean quietIfUnchanged) {
 		ClientLevel level = mc.level;
 		LocalPlayer player = mc.player;
 		if (level == null || player == null) {
@@ -57,17 +81,48 @@ public final class SeedCheck {
 		}
 		GenContext ctx = index.context(level.dimension());
 		if (ctx == null) {
+			if (!quietIfUnchanged) {
+				player.sendSystemMessage(Component.translatable("jm_seedmap.check.no_context").withStyle(ChatFormatting.YELLOW));
+			}
 			return;
 		}
-		if (!ctx.id().equals(contextId)) {
-			reset(ctx.id());
+		Verdict previous = ctx.id().equals(contextId) ? verdict : Verdict.UNKNOWN;
+		contextId = ctx.id();
+
+		OptionalLong hashed = serverHashedSeed(level);
+		hashMatch = hashed.isPresent() ? BiomeManager.obfuscateSeed(ctx.seed()) == hashed.getAsLong() : null;
+		sampleBiomes(mc, level, ctx);
+
+		if (Boolean.TRUE.equals(hashMatch)) {
+			verdict = Verdict.OK;
+		} else if (percent < 0) {
+			verdict = Boolean.FALSE.equals(hashMatch) ? Verdict.WRONG : Verdict.UNKNOWN;
+		} else if (percent >= 85) {
+			// Biomes agree even if the hash does not: the server hides or fakes the hash.
+			verdict = Verdict.OK;
+		} else {
+			verdict = percent >= 40 && hashMatch == null ? Verdict.SUSPECT : Verdict.WRONG;
 		}
+		if (quietIfUnchanged && verdict == previous) {
+			return;
+		}
+		ChatFormatting color = switch (verdict) {
+			case OK -> ChatFormatting.GREEN;
+			case SUSPECT, UNKNOWN -> ChatFormatting.YELLOW;
+			case WRONG -> ChatFormatting.RED;
+		};
+		player.sendSystemMessage(describe().copy().withStyle(color));
+	}
+
+	private void sampleBiomes(Minecraft mc, ClientLevel level, GenContext ctx) {
 		int radius = Math.max(2, mc.options.getEffectiveRenderDistance() - 1);
-		int pcx = player.chunkPosition().x();
-		int pcz = player.chunkPosition().z();
+		int pcx = mc.player.chunkPosition().x();
+		int pcz = mc.player.chunkPosition().z();
 		int minQuartY = QuartPos.fromBlock(level.getMinY());
 		int quartHeight = QuartPos.fromBlock(level.getHeight());
-		for (int i = 0; i < SAMPLES_PER_RUN; i++) {
+		int matches = 0;
+		int total = 0;
+		for (int attempt = 0; attempt < SAMPLES * 2 && total < SAMPLES; attempt++) {
 			int cx = pcx + random.nextInt(radius * 2 + 1) - radius;
 			int cz = pcz + random.nextInt(radius * 2 + 1) - radius;
 			LevelChunk chunk = level.getChunkSource().getChunk(cx, cz, ChunkStatus.FULL, false);
@@ -83,65 +138,38 @@ public final class SeedCheck {
 			if (actual.isEmpty() || predicted.isEmpty()) {
 				continue;
 			}
-			add(actual.get().identifier().equals(predicted.get().identifier()));
-		}
-		update(mc);
-	}
-
-	private void add(boolean match) {
-		if (size == WINDOW) {
-			if (window[next]) {
-				matches--;
+			total++;
+			if (actual.get().identifier().equals(predicted.get().identifier())) {
+				matches++;
 			}
-		} else {
-			size++;
 		}
-		window[next] = match;
-		if (match) {
-			matches++;
-		}
-		next = (next + 1) % WINDOW;
+		samples = total;
+		percent = total < 32 ? -1 : Math.round(matches * 100f / total);
 	}
 
-	private void update(Minecraft mc) {
-		int percent = percent();
-		if (percent < 0) {
-			verdict = Verdict.UNKNOWN;
-			return;
-		}
-		// Not 100%: chunks generated by an older game version keep their old biomes.
-		verdict = percent >= 85 ? Verdict.OK : percent >= 40 ? Verdict.SUSPECT : Verdict.WRONG;
-		if (verdict == announced || mc.player == null) {
-			return;
-		}
-		// In singleplayer the seed comes from the world itself, so only bad news is worth a message.
-		boolean singleplayer = mc.getSingleplayerServer() != null;
-		if (verdict != Verdict.OK || !singleplayer) {
-			ChatFormatting color = switch (verdict) {
-				case OK -> ChatFormatting.GREEN;
-				case SUSPECT -> ChatFormatting.YELLOW;
-				default -> ChatFormatting.RED;
-			};
-			mc.player.sendSystemMessage(Component.translatable("jm_seedmap.check." + verdict.name().toLowerCase(java.util.Locale.ROOT), percent)
-				.withStyle(color));
-		}
-		announced = verdict;
-	}
-
-	void reset(String id) {
-		contextId = id;
-		size = 0;
-		next = 0;
-		matches = 0;
+	public void reset() {
 		verdict = Verdict.UNKNOWN;
-		announced = Verdict.UNKNOWN;
+		percent = -1;
+		samples = 0;
+		hashMatch = null;
+		contextId = "";
 	}
 
 	public Component describe() {
-		int percent = percent();
-		if (percent < 0) {
-			return Component.translatable("jm_seedmap.check.status_unknown", size, MIN_SAMPLES);
+		String biomes = percent < 0 ? "?" : percent + "%";
+		if (Boolean.TRUE.equals(hashMatch)) {
+			return Component.translatable("jm_seedmap.check.hash_ok", biomes);
 		}
-		return Component.translatable("jm_seedmap.check.status_" + verdict.name().toLowerCase(java.util.Locale.ROOT), percent, size);
+		if (Boolean.FALSE.equals(hashMatch)) {
+			return verdict == Verdict.OK
+				? Component.translatable("jm_seedmap.check.hash_hidden", biomes)
+				: Component.translatable("jm_seedmap.check.hash_wrong", biomes);
+		}
+		return switch (verdict) {
+			case UNKNOWN -> Component.translatable("jm_seedmap.check.not_run");
+			case OK -> Component.translatable("jm_seedmap.check.ok", biomes, samples);
+			case SUSPECT -> Component.translatable("jm_seedmap.check.suspect", biomes, samples);
+			case WRONG -> Component.translatable("jm_seedmap.check.wrong", biomes, samples);
+		};
 	}
 }
