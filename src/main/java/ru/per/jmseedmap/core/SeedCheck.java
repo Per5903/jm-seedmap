@@ -82,7 +82,15 @@ public final class SeedCheck {
 		GenContext ctx = index.context(level.dimension());
 		if (ctx == null) {
 			if (!quietIfUnchanged) {
-				player.sendSystemMessage(Component.translatable("jm_seedmap.check.no_context").withStyle(ChatFormatting.YELLOW));
+				var status = index.status(level.dimension());
+				String key = status == null ? "jm_seedmap.check.no_context"
+					: switch (status) {
+						case LOADING -> "jm_seedmap.check.loading";
+						case ERROR -> "jm_seedmap.check.error";
+						case UNKNOWN_DIMENSION -> "jm_seedmap.status.unknown_dimension";
+						default -> "jm_seedmap.check.no_context";
+					};
+				player.sendSystemMessage(Component.translatable(key).withStyle(ChatFormatting.YELLOW));
 			}
 			return;
 		}

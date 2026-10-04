@@ -198,5 +198,8 @@
   "jm_seedmap.msg.biome_not_found": "%s not found within 6400 blocks",
   "jm_seedmap.search.tab_structures": "Structures",
   "jm_seedmap.search.tab_biomes": "Biomes",
-  "jm_seedmap.search.hint_biomes": "Which biome? (mushroom, cherry…)"
+  "jm_seedmap.search.hint_biomes": "Which biome? (mushroom, cherry…)",
+  "jm_seedmap.status.error": "world generator setup failed (see log)",
+  "jm_seedmap.check.loading": "The generator is still being prepared, try again in a moment",
+  "jm_seedmap.check.error": "Could not prepare the world generator, see the game log. Try /seedmap reload"
 }

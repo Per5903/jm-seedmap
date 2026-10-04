@@ -44,7 +44,7 @@ public final class GenContextProvider {
 		this.executor = executor;
 	}
 
-	public enum Status { READY, LOADING, NO_SEED, UNKNOWN_DIMENSION }
+	public enum Status { READY, LOADING, NO_SEED, UNKNOWN_DIMENSION, ERROR }
 
 	public record Lookup(Status status, @Nullable GenContext context) {
 	}
@@ -77,11 +77,14 @@ public final class GenContextProvider {
 				return factory.get();
 			} catch (Exception e) {
 				SeedMapClient.LOGGER.error("Failed to prepare world generator for {}", id, e);
-				return Optional.empty();
+				throw new java.util.concurrent.CompletionException(e);
 			}
 		}, executor));
 		if (!future.isDone()) {
 			return new Lookup(Status.LOADING, null);
+		}
+		if (future.isCompletedExceptionally()) {
+			return new Lookup(Status.ERROR, null);
 		}
 		Optional<GenContext> ctx = future.join();
 		return ctx.map(c -> new Lookup(Status.READY, c)).orElseGet(() -> new Lookup(Status.UNKNOWN_DIMENSION, null));
@@ -94,7 +97,7 @@ public final class GenContextProvider {
 		}
 		ServerChunkCache chunks = level.getChunkSource();
 		ChunkGeneratorStructureState state = chunks.getGeneratorState();
-		state.ensureStructuresGenerated();
+		RingPositions.ensure(state, chunks.getGenerator().getBiomeSource(), chunks.randomState());
 		return Optional.of(new GenContext(
 			id, level.getSeed(), dimension, level.registryAccess(), chunks.getGenerator(), chunks.randomState(), state,
 			server.getStructureManager(), LevelHeightAccessor.create(level.getMinY(), level.getHeight())
@@ -113,7 +116,7 @@ public final class GenContextProvider {
 			: NoiseGeneratorSettings.dummy();
 		RandomState randomState = RandomState.create(settings, data.registries.lookupOrThrow(Registries.NOISE), seed);
 		ChunkGeneratorStructureState state = generator.createState(data.registries.lookupOrThrow(Registries.STRUCTURE_SET), randomState, seed);
-		state.ensureStructuresGenerated();
+		RingPositions.ensure(state, generator.getBiomeSource(), randomState);
 		DimensionType type = stem.type().value();
 		return Optional.of(new GenContext(
 			id, seed, dimension, data.registries, generator, randomState, state, data.templates, LevelHeightAccessor.create(type.minY(), type.height())

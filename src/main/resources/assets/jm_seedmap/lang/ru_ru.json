@@ -198,5 +198,8 @@
   "jm_seedmap.msg.biome_not_found": "%s не найден в радиусе 6400 блоков",
   "jm_seedmap.search.tab_structures": "Структуры",
   "jm_seedmap.search.tab_biomes": "Биомы",
-  "jm_seedmap.search.hint_biomes": "Какой биом искать? (грибные, вишнёвая…)"
+  "jm_seedmap.search.hint_biomes": "Какой биом искать? (грибные, вишнёвая…)",
+  "jm_seedmap.status.error": "ошибка подготовки генератора (подробности в логе)",
+  "jm_seedmap.check.loading": "Генератор ещё готовится, попробуй через пару секунд",
+  "jm_seedmap.check.error": "Не удалось подготовить генератор мира — подробности в логе игры. Попробуй /seedmap reload"
 }

@@ -99,6 +99,7 @@ final class SelfTest {
 		}
 		GenContextProvider provider = new GenContextProvider(Executors.newFixedThreadPool(2));
 		boolean ok = true;
+		ok &= checkRings(server);
 		ok &= check(server, provider, Level.OVERWORLD, LevelStem.OVERWORLD, -2, 1);
 		ok &= check(server, provider, Level.NETHER, LevelStem.NETHER, -1, 0);
 		ok &= check(server, provider, Level.END, LevelStem.END, -5, 4);
@@ -144,6 +145,24 @@ final class SelfTest {
 		SeedMapClient.LOGGER.info("SELFTEST {}: variants {}", dim.identifier(), actual.stream().filter(k -> k.contains("#")).toList());
 		SeedMapClient.LOGGER.info("SELFTEST {}: {} structures; finder sp {} ms, mp {} ms, vanilla {} ms",
 			dim.identifier(), actual.size(), (t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, (t3 - t2) / 1_000_000);
+		return ok;
+	}
+
+	/** Our copy of the stronghold ring algorithm must match the server's own result exactly. */
+	private static boolean checkRings(IntegratedServer server) {
+		ServerLevel level = server.overworld();
+		var chunks = level.getChunkSource();
+		var state = chunks.getGeneratorState();
+		boolean ok = true;
+		for (Holder<StructureSet> set : state.possibleStructureSets()) {
+			if (set.value().placement() instanceof net.minecraft.world.level.levelgen.structure.placement.ConcentricRingsStructurePlacement rings) {
+				var vanilla = state.getRingPositionsFor(rings);
+				var ours = ru.per.jmseedmap.gen.RingPositions.ringPositions(rings, level.getSeed(), chunks.getGenerator().getBiomeSource(), chunks.randomState());
+				boolean same = vanilla != null && vanilla.equals(ours);
+				SeedMapClient.LOGGER.info("SELFTEST rings {}: {} positions, identical: {}", set.unwrapKey().map(Object::toString).orElse("?"), ours.size(), same);
+				ok &= same;
+			}
+		}
 		return ok;
 	}
 
