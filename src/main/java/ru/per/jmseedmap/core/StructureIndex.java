@@ -74,6 +74,8 @@ public final class StructureIndex {
 	/** Contexts with tiles computed since the last save, and the dimension they belong to. */
 	private final Map<String, ResourceKey<Level>> cacheDirty = new ConcurrentHashMap<>();
 	private final AtomicInteger completed = new AtomicInteger();
+	/** Markers that are not structure starts (End gateways), per context; computed once in the background. */
+	private final Map<String, CompletableFuture<List<FoundStructure>>> extras = new ConcurrentHashMap<>();
 	private volatile boolean errorLogged;
 	private long lastSave = Util.getMillis();
 	private int appliedThreads;
@@ -307,7 +309,49 @@ public final class StructureIndex {
 				}
 			}
 		}
+		for (FoundStructure s : extras(ctx, false)) {
+			if (inBox(s, minX, minZ, maxX, maxZ) && StructureStyles.isEnabled(s.displayId())) {
+				out.add(s);
+			}
+		}
 		return out;
+	}
+
+	/** Extra markers of this context (End gateways); empty until computed. Starts the computation. */
+	private List<FoundStructure> extras(GenContext ctx, boolean wait) {
+		if (!EndGateways.isEnd(ctx)) {
+			return List.of();
+		}
+		CompletableFuture<List<FoundStructure>> future = extras.computeIfAbsent(ctx.id(), k -> CompletableFuture.supplyAsync(() -> {
+			try {
+				// Kept with the structure tiles in the disk cache (in their opening order), so it is computed once.
+				TileKey key = new TileKey(ctx.id(), EndGateways.ID, 0, 0);
+				if (SeedMapConfig.get().diskCache) {
+					loadCache(ctx);
+					io.submit(() -> { }).get();
+				}
+				List<FoundStructure> cached = results.get(key);
+				if (cached != null && cached.size() == 20) {
+					EndGateways.register(ctx, cached);
+					return cached;
+				}
+				List<FoundStructure> computed = EndGateways.compute(ctx);
+				results.put(key, computed);
+				cacheDirty.put(ctx.id(), ctx.dimension());
+				return computed;
+			} catch (Throwable t) {
+				SeedMapClient.LOGGER.error("Could not compute the End gateways", t);
+				return List.<FoundStructure>of();
+			}
+		}, workers).whenComplete((r, e) -> completed.incrementAndGet()));
+		if (wait) {
+			return future.join();
+		}
+		return future.isDone() ? future.join() : List.of();
+	}
+
+	private static boolean inBox(FoundStructure s, double minX, double minZ, double maxX, double maxZ) {
+		return s.pos().getX() >= minX && s.pos().getX() <= maxX && s.pos().getZ() >= minZ && s.pos().getZ() <= maxZ;
 	}
 
 	/** Like {@link #query}, but every type that has been computed, shown on the map or not. */
@@ -336,6 +380,11 @@ public final class StructureIndex {
 				}
 			}
 		}
+		for (FoundStructure s : extras(ctx, false)) {
+			if (inBox(s, minX, minZ, maxX, maxZ)) {
+				out.add(s);
+			}
+		}
 		return out;
 	}
 
@@ -354,6 +403,9 @@ public final class StructureIndex {
 					ids.addAll(StructureStyles.variants(id));
 				});
 			}
+		}
+		if (EndGateways.isEnd(ctx)) {
+			ids.add(EndGateways.ID.toString());
 		}
 		return ids;
 	}
@@ -379,13 +431,19 @@ public final class StructureIndex {
 			}
 			loadCacheNow(ctx);
 			List<Holder<StructureSet>> sets = setsMatching(ctx, filter);
+			List<FoundStructure> best = new ArrayList<>();
+			for (FoundStructure s : extras(ctx, true)) {
+				if (filter.test(s.displayId()) && accept.test(s)) {
+					best.add(s);
+				}
+			}
+			Comparator<FoundStructure> byDistance = Comparator.comparingDouble(s -> s.distanceSqr(x, z));
 			if (sets.isEmpty()) {
-				return List.<FoundStructure>of();
+				best.sort(byDistance);
+				return List.copyOf(best.subList(0, Math.min(count, best.size())));
 			}
 			int cx = tile(x);
 			int cz = tile(z);
-			List<FoundStructure> best = new ArrayList<>();
-			Comparator<FoundStructure> byDistance = Comparator.comparingDouble(s -> s.distanceSqr(x, z));
 			for (int r = 0; r <= maxTiles; r++) {
 				for (int tx = cx - r; tx <= cx + r; tx++) {
 					for (int tz = cz - r; tz <= cz + r; tz++) {
@@ -454,6 +512,11 @@ public final class StructureIndex {
 							}
 						}
 					}
+				}
+			}
+			for (FoundStructure s : extras(ctx, true)) {
+				if (filter.test(s.displayId()) && s.distanceSqr(x, z) <= radius * radius) {
+					out.add(s);
 				}
 			}
 			out.sort(Comparator.comparingDouble(s -> s.distanceSqr(x, z)));
@@ -581,6 +644,7 @@ public final class StructureIndex {
 		lastStatus.clear();
 		enabledSets.clear();
 		cacheLoaded.clear();
+		extras.clear();
 		contexts.invalidate();
 		completed.incrementAndGet();
 		errorLogged = false;

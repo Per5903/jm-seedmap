@@ -109,6 +109,14 @@ public final class StructureDetails {
 	}
 
 	public Details compute(GenContext ctx, FoundStructure found) {
+		EndGateways.Gateway gateway = EndGateways.of(found);
+		if (gateway != null) {
+			BlockPos inner = gateway.inner();
+			return new Details(List.of(
+				Component.translatable("jm_seedmap.details.gateway_dragon", gateway.dragon()),
+				Component.translatable("jm_seedmap.details.gateway_leads", inner.getX(), inner.getY(), inner.getZ()),
+				Component.translatable("jm_seedmap.details.gateway_note")), null);
+		}
 		Holder<Structure> holder = ctx.registryAccess().lookupOrThrow(Registries.STRUCTURE).getOrThrow(found.structure());
 		Structure structure = holder.value();
 		StructureStart start = structure.generate(holder, ctx.dimension(), ctx.registryAccess(), ctx.generator(), ctx.generator().getBiomeSource(),

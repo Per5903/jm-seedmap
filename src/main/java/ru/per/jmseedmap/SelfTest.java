@@ -495,11 +495,6 @@ final class SelfTest {
 				Thread.sleep(1_500L);
 				screenshot(mc, "seedmap-settings-structures.png");
 				mc.execute(() -> mc.gui.setScreen(null));
-				try {
-					allTypesCheck(mc);
-				} catch (Exception e) {
-					SeedMapClient.LOGGER.error("SELFTEST all types check failed", e);
-				}
 				farmCheck(mc);
 				screenshot(mc, "seedmap-minimap.png");
 				mc.execute(() -> mc.player.setYRot(mc.player.getYRot() + 60));
@@ -532,6 +527,38 @@ final class SelfTest {
 						});
 						Thread.sleep(12_000L);
 						screenshot(mc, "seedmap-xaero-biomes-zoom" + (int) Math.round(1 / zoom) + ".png");
+					}
+				}
+				// The End: outer gateways on the world map, details of one of them.
+				var server = mc.getSingleplayerServer();
+				if (server != null && net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("xaeroworldmap")) {
+					mc.execute(() -> mc.gui.setScreen(null));
+					server.execute(() -> {
+						var player = server.getPlayerList().getPlayers().get(0);
+						player.teleport(new net.minecraft.world.level.portal.TeleportTransition(server.getLevel(Level.END),
+							new net.minecraft.world.phys.Vec3(952.5, 75, 319.5), net.minecraft.world.phys.Vec3.ZERO, 0, 0,
+							net.minecraft.world.level.portal.TeleportTransition.DO_NOTHING));
+					});
+					Thread.sleep(15_000L);
+					mc.execute(() -> openXaeroWorldMap(mc));
+					Thread.sleep(12_000L);
+					screenshot(mc, "seedmap-end-gateways.png");
+					mc.execute(() -> mc.gui.setScreen(null));
+					CompletableFuture<FoundStructure> gw = new CompletableFuture<>();
+					mc.execute(() -> gw.complete(ru.per.jmseedmap.core.SeedMap.get().index.queryAll(Level.END, 900, 250, 1000, 400).stream()
+						.filter(x -> x.id().equals("jm_seedmap:end_gateway")).findFirst().orElse(null)));
+					FoundStructure g;
+					try {
+						g = gw.get();
+					} catch (java.util.concurrent.ExecutionException e) {
+						g = null;
+					}
+					SeedMapClient.LOGGER.info("SELFTEST end gateway marker near the player: {}", g);
+					if (g != null) {
+						FoundStructure shown = g;
+						mc.execute(() -> mc.gui.setScreen(new ru.per.jmseedmap.ui.StructureInfoScreen(null, shown)));
+						Thread.sleep(3_000L);
+						screenshot(mc, "seedmap-end-gateway-info.png");
 					}
 				}
 				mc.execute(mc::stop);
@@ -796,6 +823,9 @@ final class SelfTest {
 				Thread.sleep(200L);
 			}
 			for (String id : ids) {
+				if (id.equals(ru.per.jmseedmap.core.EndGateways.ID.toString())) {
+					continue; // not a structure of the game; checked by gatewayCheck
+				}
 				mc.execute(() -> ru.per.jmseedmap.core.StructureStyles.setEnabled(id, true));
 				List<FoundStructure> found = seedMap.index.nearestN(dim, 0, 0, d -> d.equals(id), s -> true, 1, 40).get();
 				if (found.isEmpty()) {
@@ -860,6 +890,66 @@ final class SelfTest {
 		});
 	}
 
+	/**
+	 * Outer End gateways: our prediction from noise heights against the game's own search on the generated End
+	 * (its private static helpers, called read-only through reflection, nothing is built).
+	 */
+	private static void gatewayCheck(Minecraft mc) throws Exception {
+		var server = mc.getSingleplayerServer();
+		if (server == null) {
+			return;
+		}
+		ServerLevel end = server.getLevel(Level.END);
+		GenContext ctx = GenContextProvider.fromServer("selftest-gateways", server, Level.END).orElseThrow();
+		long start = System.nanoTime();
+		List<FoundStructure> predicted = ru.per.jmseedmap.core.EndGateways.compute(ctx);
+		long ms = (System.nanoTime() - start) / 1_000_000;
+		Class<?> be = net.minecraft.world.level.block.entity.TheEndGatewayBlockEntity.class;
+		var tentative = be.getDeclaredMethod("findExitPortalXZPosTentative", ServerLevel.class, net.minecraft.core.BlockPos.class);
+		var chunkOf = be.getDeclaredMethod("getChunk", Level.class, net.minecraft.world.phys.Vec3.class);
+		var spawn = be.getDeclaredMethod("findValidSpawnInChunk", net.minecraft.world.level.chunk.LevelChunk.class);
+		var tallest = be.getDeclaredMethod("findTallestBlock", net.minecraft.world.level.BlockGetter.class, net.minecraft.core.BlockPos.class, int.class, boolean.class);
+		for (var m : List.of(tentative, chunkOf, spawn, tallest)) {
+			m.setAccessible(true);
+		}
+		int exact = 0;
+		int close = 0;
+		List<String> lines = new ArrayList<>();
+		for (FoundStructure f : predicted) {
+			var gateway = ru.per.jmseedmap.core.EndGateways.of(f);
+			net.minecraft.core.BlockPos real = CompletableFuture.supplyAsync(() -> {
+				try {
+					var xz = (net.minecraft.world.phys.Vec3) tentative.invoke(null, end, gateway.inner());
+					var chunk = chunkOf.invoke(null, end, xz);
+					var pos = (net.minecraft.core.BlockPos) spawn.invoke(null, chunk);
+					if (pos == null) {
+						pos = net.minecraft.core.BlockPos.containing(xz.x + 0.5, 75.0, xz.z + 0.5);
+					}
+					var top = (net.minecraft.core.BlockPos) tallest.invoke(null, end, pos, 16, true);
+					return top.above(10);
+				} catch (ReflectiveOperationException e) {
+					throw new RuntimeException(e);
+				}
+			}, server).get();
+			double d = Math.sqrt(real.distSqr(f.pos()));
+			if (d > 0) {
+				net.minecraft.core.BlockPos top = real.below(10);
+				String states = CompletableFuture.supplyAsync(() -> {
+					StringBuilder sb = new StringBuilder();
+					for (int dy = 0; dy >= -16; dy--) {
+						sb.append(top.offset(0, dy, 0).getY()).append('=').append(end.getBlockState(top.offset(0, dy, 0)).getBlock().getDescriptionId().replace("block.minecraft.", "")).append(' ');
+					}
+					return sb.toString();
+				}, server).get();
+				SeedMapClient.LOGGER.info("SELFTEST gateway #{} game's tallest column {}: {}", gateway.dragon(), top.toShortString(), states);
+			}
+			if (d == 0) exact++;
+			if (d <= 16) close++;
+			lines.add("#" + gateway.dragon() + " predicted " + f.pos().toShortString() + " real " + real.toShortString() + " (" + Math.round(d) + ")");
+		}
+		SeedMapClient.LOGGER.info("SELFTEST gateways: computed 20 in {} ms; of 20 checked {} exact, {} within 16 blocks; {}", ms, exact, close, lines);
+	}
+
 	/** Farm mode: pins on the nearest villages; reaching the first one moves the pins to the next. */
 	private static void farmCheck(Minecraft mc) throws InterruptedException {
 		var seedMap = ru.per.jmseedmap.core.SeedMap.get();
@@ -900,8 +990,25 @@ final class SelfTest {
 	/** Exercises nearest search, pins and visited marks the way the UI does. */
 	private static void featureCheck(Minecraft mc) throws InterruptedException {
 		var seedMap = ru.per.jmseedmap.core.SeedMap.get();
+		// A previous run may have left the player in another dimension: the checks below are for the Overworld.
+		var sp = mc.getSingleplayerServer();
+		if (sp != null && !mc.level.dimension().equals(Level.OVERWORLD)) {
+			sp.execute(() -> {
+				var player = sp.getPlayerList().getPlayers().get(0);
+				var overworld = sp.overworld();
+				player.teleport(new net.minecraft.world.level.portal.TeleportTransition(overworld,
+					new net.minecraft.world.phys.Vec3(0.5, overworld.getMaxY() - 40, 0.5), net.minecraft.world.phys.Vec3.ZERO, 0, 0,
+					net.minecraft.world.level.portal.TeleportTransition.DO_NOTHING));
+			});
+			Thread.sleep(10_000L);
+		}
 		revisitCheck(mc);
 		farmCheck(mc);
+		try {
+			gatewayCheck(mc);
+		} catch (Exception e) {
+			SeedMapClient.LOGGER.error("SELFTEST gateway check failed", e);
+		}
 		try {
 			allTypesCheck(mc);
 		} catch (Exception e) {

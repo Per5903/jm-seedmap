@@ -354,5 +354,10 @@
   "jm_seedmap.hud.empty_loading": "computing…",
   "jm_seedmap.hud.empty_off": "structure layer is off (Y)",
   "jm_seedmap.hud.farm": "Farming: %s · visited %s",
-  "jm_seedmap.hud.farm_searching": "looking for the next ones…"
+  "jm_seedmap.hud.farm_searching": "looking for the next ones…",
+  "jm_seedmap.structure.jm_seedmap.end_gateway": "End Gateway (to the main island)",
+  "jm_seedmap.group.end_gateway": "End Gateways",
+  "jm_seedmap.details.gateway_dragon": "Opens after dragon kill #%s",
+  "jm_seedmap.details.gateway_leads": "Leads to the gateway at the main island: %s %s %s",
+  "jm_seedmap.details.gateway_note": "Position computed from the End terrain; with chorus or an End city nearby the gateway can be 10-15 blocks off"
 }

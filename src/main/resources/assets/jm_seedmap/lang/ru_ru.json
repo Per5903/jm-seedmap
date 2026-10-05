@@ -354,5 +354,10 @@
   "jm_seedmap.hud.empty_loading": "считается…",
   "jm_seedmap.hud.empty_off": "слой структур выключен (Y)",
   "jm_seedmap.hud.farm": "Фарм: %s · пройдено %s",
-  "jm_seedmap.hud.farm_searching": "ищу следующие…"
+  "jm_seedmap.hud.farm_searching": "ищу следующие…",
+  "jm_seedmap.structure.jm_seedmap.end_gateway": "Врата Края (на основной остров)",
+  "jm_seedmap.group.end_gateway": "Врата Края",
+  "jm_seedmap.details.gateway_dragon": "Открываются после %s-го убийства дракона",
+  "jm_seedmap.details.gateway_leads": "Ведут к вратам у центрального острова: %s %s %s",
+  "jm_seedmap.details.gateway_note": "Место посчитано по рельефу Края; если рядом растёт хорус или стоит город Края, врата могут оказаться на 10–15 блоков в стороне"
 }

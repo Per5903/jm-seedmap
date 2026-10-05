@@ -92,6 +92,8 @@ public final class StructureStyles {
 		put("end_city", new Style("item/shulker_shell", 0xA070A8, true));
 		// Variant: End city that has the elytra ship (see FoundStructure#displayId).
 		put("end_city_ship", new Style("item/elytra", 0xE0A030, true));
+		// Not a structure: the outer End gateways that lead back to the main island (see EndGateways).
+		STYLES.put("jm_seedmap:end_gateway", new Style("item/ender_pearl", 0x1F7A6E, true));
 
 		group("village", "village_plains", "village_desert", "village_savanna", "village_snowy", "village_taiga");
 		group("pillager_outpost", "pillager_outpost");
@@ -116,6 +118,7 @@ public final class StructureStyles {
 		group("nether_fossil", "nether_fossil");
 		group("end_city", "end_city");
 		group("end_city_ship", "end_city_ship");
+		GROUPS.add(new Group("end_gateway", List.of("jm_seedmap:end_gateway")));
 	}
 
 	/** Display ids of the variants a structure can produce, e.g. end_city -> end_city_ship. */
