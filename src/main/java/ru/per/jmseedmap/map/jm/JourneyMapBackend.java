@@ -291,7 +291,10 @@ public final class JourneyMapBackend implements MapBackend {
 		UIState state = api.getUIState(Context.UI.Fullscreen);
 		if (config.enabled && config.showBiomes && state != null && state.active && state.blockBounds != null && state.dimension != null) {
 			AABB b = state.blockBounds;
-			int radius = ru.per.jmseedmap.core.Perf.current().biomeRadius;
+			var perf = ru.per.jmseedmap.core.Perf.current();
+			// Zoomed out: coarser cells over a wider area (see the Xaero backend).
+			int minCell = BiomeLayer.cellForZoom((b.maxX - b.minX) / Math.max(1, Minecraft.getInstance().getWindow().getWidth()));
+			int radius = BiomeLayer.radiusFor(perf, minCell);
 			int cx = Math.floorDiv((int) ((b.minX + b.maxX) / 2), 512);
 			int cz = Math.floorDiv((int) ((b.minZ + b.maxZ) / 2), 512);
 			int minX = Math.max(Math.floorDiv((int) b.minX, 512), cx - radius);
@@ -300,7 +303,7 @@ public final class JourneyMapBackend implements MapBackend {
 			int maxZ = Math.min(Math.floorDiv((int) b.maxZ, 512), cz + radius);
 			for (int tx = minX; tx <= maxX; tx++) {
 				for (int tz = minZ; tz <= maxZ; tz++) {
-					BiomeLayer.Tile tile = seedMap.biomes.get(state.dimension, tx, tz);
+					BiomeLayer.Tile tile = seedMap.biomes.get(state.dimension, tx, tz, minCell);
 					if (tile != null) {
 						wanted.put(state.dimension.identifier() + "|" + tx + "," + tz, tile);
 					}

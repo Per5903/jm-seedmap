@@ -348,5 +348,10 @@
   "jm_seedmap.cmd.highlight_cleared": "Biome highlight cleared",
   "jm_seedmap.cmd.unknown_type": "Unknown structure type: %s",
   "jm_seedmap.opt.visit_height": "Visit height",
-  "jm_seedmap.opt.visit_height.tip": "A structure only counts as visited within this many blocks above or below it: walking over an ancient city or a mineshaft does not count. Off = height does not matter."
+  "jm_seedmap.opt.visit_height.tip": "A structure only counts as visited within this many blocks above or below it: walking over an ancient city or a mineshaft does not count. Off = height does not matter.",
+  "jm_seedmap.hud.empty": "nothing within %s m",
+  "jm_seedmap.hud.empty_no_seed": "server seed not set (/seedmap seed)",
+  "jm_seedmap.hud.empty_loading": "computing…",
+  "jm_seedmap.hud.empty_off": "structure layer is off (Y)",
+  "jm_seedmap.farm.hud_on": "Turned on the on-screen nearby list — the target and its arrow are there. Turn off: /seedmap hud off"
 }

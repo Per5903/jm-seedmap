@@ -32,8 +32,11 @@ import ru.per.jmseedmap.gen.StructureFinder;
  * which rules out cave biomes and leaves exactly the surface biome of each column.
  */
 public final class BiomeLayer {
-	private static final int MAX_TILES = 600;
-	private static final int MAX_PENDING = 6;
+	/** Memory budget of the tile cache in cells (6 bytes each): ~9 MB, i.e. ~360 fine tiles or thousands of coarse ones. */
+	private static final long MAX_CELLS = 1_500_000;
+	private static final int MAX_PENDING = 12;
+	/** Possible cell sizes, fine to coarse. */
+	public static final int[] CELLS = {4, 8, 16, 32, 64};
 
 	/**
 	 * One computed tile.
@@ -55,12 +58,9 @@ public final class BiomeLayer {
 	}
 
 	private final StructureIndex index;
-	private final Map<Key, Tile> tiles = java.util.Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, true) {
-		@Override
-		protected boolean removeEldestEntry(Map.Entry<Key, Tile> eldest) {
-			return size() > MAX_TILES;
-		}
-	});
+	/** Access-ordered: the least recently drawn tiles are dropped first when over {@link #MAX_CELLS}. */
+	private final LinkedHashMap<Key, Tile> tiles = new LinkedHashMap<>(256, 0.75f, true);
+	private long cachedCells;
 	private final Set<Key> pending = ConcurrentHashMap.newKeySet();
 	private final AtomicInteger version = new AtomicInteger();
 	private volatile boolean errorLogged;
@@ -87,13 +87,28 @@ public final class BiomeLayer {
 	 * Render thread.
 	 */
 	public @Nullable Tile get(ResourceKey<Level> dimension, int tileX, int tileZ) {
+		return get(dimension, tileX, tileZ, 0);
+	}
+
+	/**
+	 * @param minCell coarsest detail the map can show at its zoom (blocks per cell); far out a coarse tile is enough
+	 *                and much cheaper, so the whole view fills in
+	 */
+	public @Nullable Tile get(ResourceKey<Level> dimension, int tileX, int tileZ, int minCell) {
 		GenContext ctx = index.context(dimension);
 		if (ctx == null) {
 			return null;
 		}
 		int cell = Perf.current().biomeCell;
-		Key key = new Key(ctx.id(), tileX, tileZ, cell);
-		Tile tile = tiles.get(key);
+		for (int c : CELLS) {
+			if (c >= Math.max(cell, minCell)) {
+				cell = c;
+				break;
+			}
+		}
+		final int chosen = cell;
+		Key key = new Key(ctx.id(), tileX, tileZ, chosen);
+		Tile tile = cached(key);
 		if (tile != null) {
 			return tile;
 		}
@@ -102,7 +117,7 @@ public final class BiomeLayer {
 		if (encoded != null) {
 			tile = decode(tileX, tileZ, cell, encoded);
 			if (tile != null) {
-				tiles.put(key, tile);
+				cache(key, tile);
 				return tile;
 			}
 		}
@@ -110,8 +125,8 @@ public final class BiomeLayer {
 			int sampleY = sampleY(ctx, dimension);
 			index.executeBackground(() -> {
 				try {
-					Tile computed = compute(ctx, tileX, tileZ, cell, sampleY);
-					tiles.put(key, computed);
+					Tile computed = compute(ctx, tileX, tileZ, chosen, sampleY);
+					cache(key, computed);
 					if (ru.per.jmseedmap.SeedMapConfig.get().diskCache && stored.size() < MAX_STORED) {
 						stored.put(key, encode(computed));
 						storeDirty.add(ctx.id());
@@ -127,16 +142,48 @@ public final class BiomeLayer {
 				}
 			});
 		}
-		// Meanwhile show the same tile at another resolution, if there is one.
-		for (int other : new int[]{4, 8, 16}) {
+		// Meanwhile keep showing the same tile at another resolution (finer first), so nothing disappears on zoom.
+		for (int other : CELLS) {
 			if (other != cell) {
-				Tile fallback = tiles.get(new Key(ctx.id(), tileX, tileZ, other));
+				Tile fallback = cached(new Key(ctx.id(), tileX, tileZ, other));
 				if (fallback != null) {
 					return fallback;
 				}
 			}
 		}
 		return null;
+	}
+
+	private @Nullable Tile cached(Key key) {
+		synchronized (tiles) {
+			return tiles.get(key);
+		}
+	}
+
+	private void cache(Key key, Tile tile) {
+		synchronized (tiles) {
+			Tile old = tiles.put(key, tile);
+			cachedCells += tile.cells().length - (old == null ? 0 : old.cells().length);
+			var it = tiles.values().iterator();
+			while (cachedCells > MAX_CELLS && it.hasNext()) {
+				Tile eldest = it.next();
+				if (eldest == tile) {
+					break;
+				}
+				cachedCells -= eldest.cells().length;
+				it.remove();
+			}
+		}
+	}
+
+	/** How many tiles around the map center to draw: wider when the cells are coarse (zoomed out), at most 16. */
+	public static int radiusFor(Perf perf, int cell) {
+		return (int) Math.clamp((long) perf.biomeRadius * Math.max(1, cell / perf.biomeCell), perf.biomeRadius, 16);
+	}
+
+	/** Cell size to ask for when one map pixel covers {@code blocksPerPixel} blocks: about two pixels per cell. */
+	public static int cellForZoom(double blocksPerPixel) {
+		return (int) Math.ceil(blocksPerPixel * 2);
 	}
 
 	private static int sampleY(GenContext ctx, ResourceKey<Level> dimension) {
@@ -189,7 +236,10 @@ public final class BiomeLayer {
 
 	public void reset() {
 		saveDirty();
-		tiles.clear();
+		synchronized (tiles) {
+			tiles.clear();
+			cachedCells = 0;
+		}
 		stored.clear();
 		storeLoaded.clear();
 		version.incrementAndGet();

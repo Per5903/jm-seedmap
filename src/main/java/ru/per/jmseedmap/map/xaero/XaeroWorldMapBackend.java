@@ -350,12 +350,15 @@ public final class XaeroWorldMapBackend implements MapBackend {
 				Perf perf = Perf.current();
 				double halfW = halfWidth(info);
 				double halfH = halfHeight(info);
+				// Zoomed out: coarser cells (cheap) over a wider area, so what was computed stays and the view fills in.
+				int minCell = BiomeLayer.cellForZoom(1.0 / info.scale);
+				int radius = BiomeLayer.radiusFor(perf, minCell);
 				int cx = Math.floorDiv((int) info.renderPos.x, 512);
 				int cz = Math.floorDiv((int) info.renderPos.z, 512);
-				int minX = Math.max(Math.floorDiv((int) (info.renderPos.x - halfW), 512), cx - perf.biomeRadius);
-				int maxX = Math.min(Math.floorDiv((int) (info.renderPos.x + halfW), 512), cx + perf.biomeRadius);
-				int minZ = Math.max(Math.floorDiv((int) (info.renderPos.z - halfH), 512), cz - perf.biomeRadius);
-				int maxZ = Math.min(Math.floorDiv((int) (info.renderPos.z + halfH), 512), cz + perf.biomeRadius);
+				int minX = Math.max(Math.floorDiv((int) (info.renderPos.x - halfW), 512), cx - radius);
+				int maxX = Math.min(Math.floorDiv((int) (info.renderPos.x + halfW), 512), cx + radius);
+				int minZ = Math.max(Math.floorDiv((int) (info.renderPos.z - halfH), 512), cz - radius);
+				int maxZ = Math.min(Math.floorDiv((int) (info.renderPos.z + halfH), 512), cz + radius);
 				long now = net.minecraft.util.Util.getMillis();
 				if (now - context.masksTime > 500) {
 					context.masks.clear();
@@ -363,9 +366,11 @@ public final class XaeroWorldMapBackend implements MapBackend {
 				}
 				MapProcessor processor = config.biomesOnlyUnexplored ? processor() : null;
 				List<BiomeElement> list = new ArrayList<>();
-				for (int tx = minX; tx <= maxX; tx++) {
-					for (int tz = minZ; tz <= maxZ; tz++) {
-						BiomeLayer.Tile tile = seedMap.biomes.get(dim, tx, tz);
+				for (int[] t : centerFirst(minX, maxX, minZ, maxZ, cx, cz)) {
+					int tx = t[0];
+					int tz = t[1];
+					{
+						BiomeLayer.Tile tile = seedMap.biomes.get(dim, tx, tz, minCell);
 						if (tile == null) {
 							continue;
 						}
@@ -394,6 +399,18 @@ public final class XaeroWorldMapBackend implements MapBackend {
 				fail("biomes", t);
 				context.elements = List.of();
 			}
+		}
+
+		/** Tile coordinates of the box, nearest to (cx, cz) first: those get computed first. */
+		static List<int[]> centerFirst(int minX, int maxX, int minZ, int maxZ, int cx, int cz) {
+			List<int[]> out = new ArrayList<>();
+			for (int tx = minX; tx <= maxX; tx++) {
+				for (int tz = minZ; tz <= maxZ; tz++) {
+					out.add(new int[]{tx, tz});
+				}
+			}
+			out.sort(Comparator.comparingInt(t -> Math.max(Math.abs(t[0] - cx), Math.abs(t[1] - cz))));
+			return out;
 		}
 
 		private static @Nullable MapProcessor processor() {

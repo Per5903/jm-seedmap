@@ -32,6 +32,8 @@ public final class NearbyHud implements HudElement {
 	}
 
 	private List<Entry> entries = List.of();
+	/** Shown instead of the list when it is empty, so it is clear the HUD is on (and why there is nothing). */
+	private Component emptyReason = Component.empty();
 
 	/** Every few ticks: which structures to list. */
 	public void update(SeedMap seedMap, Minecraft mc) {
@@ -39,6 +41,7 @@ public final class NearbyHud implements HudElement {
 		LocalPlayer player = mc.player;
 		if (!config.hudEnabled || player == null || mc.level == null) {
 			entries = List.of();
+			emptyReason = Component.empty();
 			return;
 		}
 		ResourceKey<Level> dim = mc.level.dimension();
@@ -67,6 +70,14 @@ public final class NearbyHud implements HudElement {
 			}
 		}
 		entries = out;
+		if (out.isEmpty()) {
+			var status = seedMap.index.status(dim);
+			String key = !config.enabled ? "jm_seedmap.hud.empty_off"
+				: status == ru.per.jmseedmap.gen.GenContextProvider.Status.NO_SEED ? "jm_seedmap.hud.empty_no_seed"
+				: status == ru.per.jmseedmap.gen.GenContextProvider.Status.LOADING || seedMap.index.pendingTiles() > 0 ? "jm_seedmap.hud.empty_loading"
+				: "jm_seedmap.hud.empty";
+			emptyReason = Component.translatable(key, config.hudRadius);
+		}
 	}
 
 	@Override
@@ -74,10 +85,20 @@ public final class NearbyHud implements HudElement {
 		Minecraft mc = Minecraft.getInstance();
 		List<Entry> list = entries;
 		LocalPlayer player = mc.player;
-		if (list.isEmpty() || player == null || mc.getDebugOverlay().showDebugScreen()) {
+		// Only the real F3 screen hides the list: debug lines pinned to the screen (26.x) must not.
+		if (!SeedMapConfig.get().hudEnabled || player == null || mc.debugEntries.isOverlayVisible()) {
 			return;
 		}
 		Font font = mc.font;
+		if (list.isEmpty()) {
+			Component text = Component.literal("SeedMap: ").append(emptyReason);
+			int w = font.width(text) + 6;
+			int x = SeedMapConfig.get().hudCorner.name().endsWith("LEFT") ? 4 : graphics.guiWidth() - w - 4;
+			int y = SeedMapConfig.get().hudCorner.name().startsWith("TOP") ? 4 : graphics.guiHeight() / 2 - 6;
+			graphics.fill(x, y, x + w, y + 12, 0x80000000);
+			graphics.text(font, text, x + 3, y + 2, 0xFFAAAAAA);
+			return;
+		}
 		float partial = delta.getGameTimeDeltaPartialTick(true);
 		double px = net.minecraft.util.Mth.lerp(partial, player.xo, player.getX());
 		double pz = net.minecraft.util.Mth.lerp(partial, player.zo, player.getZ());

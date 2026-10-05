@@ -475,6 +475,13 @@ final class SelfTest {
 			}
 			if (Boolean.getBoolean("jm_seedmap.selftest.quick")) {
 				Thread.sleep(10_000L);
+				// FPS pinned on screen (a 26.x debug option): the nearby HUD must still show.
+				mc.execute(() -> mc.debugEntries.setStatus(net.minecraft.client.gui.components.debug.DebugScreenEntries.FPS,
+					net.minecraft.client.gui.components.debug.DebugScreenEntryStatus.ALWAYS_ON));
+				Thread.sleep(2_000L);
+				screenshot(mc, "seedmap-hud-pinned-debug.png");
+				mc.execute(() -> mc.debugEntries.setStatus(net.minecraft.client.gui.components.debug.DebugScreenEntries.FPS,
+					net.minecraft.client.gui.components.debug.DebugScreenEntryStatus.IN_OVERLAY));
 				mc.execute(() -> {
 					try {
 						var field = ru.per.jmseedmap.ui.SeedMapConfigScreen.class.getDeclaredField("tab");
@@ -511,6 +518,21 @@ final class SelfTest {
 					Thread.sleep(3_000L);
 					screenshot(mc, "seedmap-xaero-highlight.png");
 					mc.execute(ru.per.jmseedmap.core.BiomeLayer::clearHighlight);
+					// Zoom far out: the biome layer must keep (and fill) the whole view.
+					SeedMapConfig.get().biomesOnlyUnexplored = false;
+					for (double zoom : new double[]{0.25, 0.0625}) {
+						mc.execute(() -> {
+							try {
+								var f = Class.forName("xaero.map.gui.GuiMap").getDeclaredField("destScale");
+								f.setAccessible(true);
+								f.setDouble(null, zoom);
+							} catch (ReflectiveOperationException e) {
+								SeedMapClient.LOGGER.error("SELFTEST cannot zoom Xaero's map", e);
+							}
+						});
+						Thread.sleep(12_000L);
+						screenshot(mc, "seedmap-xaero-biomes-zoom" + (int) Math.round(1 / zoom) + ".png");
+					}
 				}
 				mc.execute(mc::stop);
 				return;

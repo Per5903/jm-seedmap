@@ -61,6 +61,12 @@ public final class FarmMode {
 		this.dimension = mc.level.dimension();
 		this.visitedCount = 0;
 		message(Component.translatable("jm_seedmap.farm.started", group.displayName(), this.count).withStyle(ChatFormatting.AQUA));
+		if (!ru.per.jmseedmap.SeedMapConfig.get().hudEnabled) {
+			// The route is followed with the on-screen list (target arrow on top), so turn it on.
+			ru.per.jmseedmap.SeedMapConfig.get().hudEnabled = true;
+			ru.per.jmseedmap.SeedMapConfig.save();
+			message(Component.translatable("jm_seedmap.farm.hud_on"));
+		}
 		refresh();
 	}
 
