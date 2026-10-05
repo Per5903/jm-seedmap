@@ -18,6 +18,8 @@ import ru.per.jmseedmap.gen.FoundStructure;
  * player can go from village to village (or portal to portal) without searching again.
  */
 public final class FarmMode {
+	/** Pins kept on the route: the target and the next two, so the player sees where the route goes on. */
+	public static final int DEFAULT_PINS = 3;
 	/** How far the search goes, in 512-block tiles. */
 	private static final int MAX_TILES = 40;
 
@@ -50,6 +52,25 @@ public final class FarmMode {
 		return visitedCount;
 	}
 
+	/** The structures the route currently has pins on (target included), as pins of this world. */
+	public List<WorldData.Pin> pins() {
+		WorldData world = seedMap.world();
+		if (world == null || group == null) {
+			return List.of();
+		}
+		List<WorldData.Pin> out = new java.util.ArrayList<>();
+		for (WorldData.Pin pin : world.pins()) {
+			if (!pin.target() && pinned.contains(pin.key())) {
+				out.add(pin);
+			}
+		}
+		return out;
+	}
+
+	public boolean isSearching() {
+		return searching;
+	}
+
 	public void start(StructureStyles.Group group, int count) {
 		stop(false);
 		Minecraft mc = Minecraft.getInstance();
@@ -60,13 +81,7 @@ public final class FarmMode {
 		this.count = Math.clamp(count, 1, 10);
 		this.dimension = mc.level.dimension();
 		this.visitedCount = 0;
-		message(Component.translatable("jm_seedmap.farm.started", group.displayName(), this.count).withStyle(ChatFormatting.AQUA));
-		if (!ru.per.jmseedmap.SeedMapConfig.get().hudEnabled) {
-			// The route is followed with the on-screen list (target arrow on top), so turn it on.
-			ru.per.jmseedmap.SeedMapConfig.get().hudEnabled = true;
-			ru.per.jmseedmap.SeedMapConfig.save();
-			message(Component.translatable("jm_seedmap.farm.hud_on"));
-		}
+		message(Component.translatable("jm_seedmap.farm.started", group.displayName()).withStyle(ChatFormatting.AQUA));
 		refresh();
 	}
 

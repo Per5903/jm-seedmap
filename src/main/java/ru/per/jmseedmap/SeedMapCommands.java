@@ -167,7 +167,7 @@ public final class SeedMapCommands {
 					return 1;
 				}))
 				.then(argument("type", StringArgumentType.word()).suggests(groups)
-					.executes(ctx -> farm(ctx, 3))
+					.executes(ctx -> farm(ctx, ru.per.jmseedmap.core.FarmMode.DEFAULT_PINS))
 					.then(argument("count", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 10))
 						.executes(ctx -> farm(ctx, com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "count"))))))
 			.then(literal("biomes")

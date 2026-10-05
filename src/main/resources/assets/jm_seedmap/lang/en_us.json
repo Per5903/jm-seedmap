@@ -330,14 +330,14 @@
   "jm_seedmap.profile.list": "Seed profiles of %s (click to select):",
   "jm_seedmap.profile.no_seed": "no seed",
   "jm_seedmap.info.inside": "Inside",
-  "jm_seedmap.farm.started": "Farming %s: pins on the %s nearest unvisited ones. Reach one and the pins move on to the next.",
+  "jm_seedmap.farm.started": "Farming %s: the target moves from one structure to the next nearest unvisited one until you stop it (Stop in the search screen or /seedmap farm stop). The way is shown on the right of the screen.",
   "jm_seedmap.farm.stopped": "Farming \"%s\" stopped, visited: %s",
   "jm_seedmap.farm.none": "No more unvisited \"%s\" within %s blocks",
   "jm_seedmap.farm.next": "Next: %s · %s m, %s",
   "jm_seedmap.farm.mode": "Mode",
   "jm_seedmap.farm.mode_nearest": "nearest",
-  "jm_seedmap.farm.mode_farm": "farm ×%s",
-  "jm_seedmap.farm.mode.tip": "\"Nearest\" sets one target. \"Farm\" keeps pins on the N nearest unvisited ones; reach one and the pins move on to the next of the same type.",
+  "jm_seedmap.farm.mode_farm": "farm",
+  "jm_seedmap.farm.mode.tip": "\"Nearest\" sets one target. \"Farm\" targets the nearest unvisited one; reach it and the target moves on to the next of the same type until you stop it.",
   "jm_seedmap.farm.stop": "Stop: %s (visited %s)",
   "jm_seedmap.search.find_biome": "Find the nearest one and set it as target",
   "jm_seedmap.search.highlight_on": "Highlight: ✔",
@@ -353,5 +353,6 @@
   "jm_seedmap.hud.empty_no_seed": "server seed not set (/seedmap seed)",
   "jm_seedmap.hud.empty_loading": "computing…",
   "jm_seedmap.hud.empty_off": "structure layer is off (Y)",
-  "jm_seedmap.farm.hud_on": "Turned on the on-screen nearby list — the target and its arrow are there. Turn off: /seedmap hud off"
+  "jm_seedmap.hud.farm": "Farming: %s · visited %s",
+  "jm_seedmap.hud.farm_searching": "looking for the next ones…"
 }

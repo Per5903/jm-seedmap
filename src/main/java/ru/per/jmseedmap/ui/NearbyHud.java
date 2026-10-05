@@ -32,6 +32,8 @@ public final class NearbyHud implements HudElement {
 	}
 
 	private List<Entry> entries = List.of();
+	/** Farm mode: a title line above the rows ("Farm: villages · visited 3"), otherwise empty. */
+	private Component header = Component.empty();
 	/** Shown instead of the list when it is empty, so it is clear the HUD is on (and why there is nothing). */
 	private Component emptyReason = Component.empty();
 
@@ -39,6 +41,11 @@ public final class NearbyHud implements HudElement {
 	public void update(SeedMap seedMap, Minecraft mc) {
 		SeedMapConfig config = SeedMapConfig.get();
 		LocalPlayer player = mc.player;
+		header = Component.empty();
+		if (seedMap.farm.active() && player != null && mc.level != null) {
+			updateFarm(seedMap, player);
+			return;
+		}
 		if (!config.hudEnabled || player == null || mc.level == null) {
 			entries = List.of();
 			emptyReason = Component.empty();
@@ -80,18 +87,44 @@ public final class NearbyHud implements HudElement {
 		}
 	}
 
+	/** Farm mode: the route's target and next pins, nearest first, under a title with the progress. */
+	private void updateFarm(SeedMap seedMap, LocalPlayer player) {
+		var farm = seedMap.farm;
+		header = Component.translatable("jm_seedmap.hud.farm", farm.group() == null ? "" : farm.group().displayName(), farm.visitedCount());
+		List<Entry> out = new ArrayList<>();
+		WorldData.Pin target = seedMap.world() == null ? null : seedMap.world().target();
+		if (target != null && target.dimensionKey().equals(player.level().dimension())) {
+			out.add(new Entry(StructureStyles.icon(target.structure()), target.name(), target.x() + 0.5, target.z() + 0.5, false, true));
+		}
+		List<WorldData.Pin> pins = new ArrayList<>(farm.pins());
+		pins.sort(Comparator.comparingDouble(p -> {
+			double dx = p.x() + 0.5 - player.getX();
+			double dz = p.z() + 0.5 - player.getZ();
+			return dx * dx + dz * dz;
+		}));
+		for (WorldData.Pin pin : pins) {
+			if (target != null && pin.key().equals(target.key())) {
+				continue;
+			}
+			out.add(new Entry(StructureStyles.icon(pin.structure()), pin.name(), pin.x() + 0.5, pin.z() + 0.5, false, false));
+		}
+		entries = out;
+		emptyReason = Component.translatable(farm.isSearching() ? "jm_seedmap.hud.farm_searching" : "jm_seedmap.hud.empty_loading");
+	}
+
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, DeltaTracker delta) {
 		Minecraft mc = Minecraft.getInstance();
 		List<Entry> list = entries;
 		LocalPlayer player = mc.player;
 		// Only the real F3 screen hides the list: debug lines pinned to the screen (26.x) must not.
-		if (!SeedMapConfig.get().hudEnabled || player == null || mc.debugEntries.isOverlayVisible()) {
+		boolean farm = !header.getString().isEmpty();
+		if ((!SeedMapConfig.get().hudEnabled && !farm) || player == null || mc.debugEntries.isOverlayVisible()) {
 			return;
 		}
 		Font font = mc.font;
 		if (list.isEmpty()) {
-			Component text = Component.literal("SeedMap: ").append(emptyReason);
+			Component text = farm ? header.copy().append(" · ").append(emptyReason) : Component.literal("SeedMap: ").append(emptyReason);
 			int w = font.width(text) + 6;
 			int x = SeedMapConfig.get().hudCorner.name().endsWith("LEFT") ? 4 : graphics.guiWidth() - w - 4;
 			int y = SeedMapConfig.get().hudCorner.name().startsWith("TOP") ? 4 : graphics.guiHeight() / 2 - 6;
@@ -121,8 +154,9 @@ public final class NearbyHud implements HudElement {
 			nameWidth = Math.max(nameWidth, font.width(name));
 			distWidth = Math.max(distWidth, font.width(dist));
 		}
-		int width = 2 + ICON + 3 + nameWidth + 6 + distWidth + 3 + 9 + 2;
-		int height = list.size() * ROW + 2;
+		int titleHeight = farm ? 12 : 0;
+		int width = Math.max(2 + ICON + 3 + nameWidth + 6 + distWidth + 3 + 9 + 2, farm ? font.width(header) + 8 : 0);
+		int height = list.size() * ROW + 2 + titleHeight;
 		int sw = graphics.guiWidth();
 		int sh = graphics.guiHeight();
 		SeedMapConfig.HudCorner corner = SeedMapConfig.get().hudCorner;
@@ -135,10 +169,14 @@ public final class NearbyHud implements HudElement {
 			case MIDDLE_LEFT, MIDDLE_RIGHT -> (sh - height) / 2;
 		};
 		graphics.fill(x, y, x + width, y + height, 0x80000000);
+		if (farm) {
+			graphics.fill(x, y, x + width, y + titleHeight, 0xA0205060);
+			graphics.text(font, header, x + 4, y + 2, 0xFF7FE7FF);
+		}
 		int size = StructureStyles.ICON_SIZE;
 		for (int i = 0; i < list.size(); i++) {
 			Entry e = list.get(i);
-			int rowY = y + 1 + i * ROW;
+			int rowY = y + titleHeight + 1 + i * ROW;
 			graphics.blit(RenderPipelines.GUI_TEXTURED, e.icon(), x + 2, rowY, 0, 0, ICON, ICON, size, size, size, size);
 			int color = e.target() ? 0xFF55FFFF : e.dimmed() ? 0xFFAAAAAA : 0xFFFFFFFF;
 			int textY = rowY + 2;

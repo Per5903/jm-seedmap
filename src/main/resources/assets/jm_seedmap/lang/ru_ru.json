@@ -330,14 +330,14 @@
   "jm_seedmap.profile.list": "Профили сида для %s (клик — выбрать):",
   "jm_seedmap.profile.no_seed": "сид не задан",
   "jm_seedmap.info.inside": "Что внутри",
-  "jm_seedmap.farm.started": "Фарм: %s — держу метки на %s ближайших непосещённых. Дошёл до одной — метки переедут на следующие.",
+  "jm_seedmap.farm.started": "Фарм: %s. Веду от одной структуры к следующей ближайшей непосещённой, пока не выключишь (кнопка «Стоп» в поиске или /seedmap farm stop). Куда идти — справа на экране.",
   "jm_seedmap.farm.stopped": "Фарм «%s» остановлен, пройдено: %s",
   "jm_seedmap.farm.none": "Больше нет непосещённых «%s» в радиусе %s блоков",
   "jm_seedmap.farm.next": "Следующая: %s · %s м, %s",
   "jm_seedmap.farm.mode": "Режим",
   "jm_seedmap.farm.mode_nearest": "ближайшая",
-  "jm_seedmap.farm.mode_farm": "фарм ×%s",
-  "jm_seedmap.farm.mode.tip": "«Ближайшая» — одна метка-цель. «Фарм» — метки на N ближайших непосещённых; когда доходишь до одной, метки сами переезжают на следующие такого же типа.",
+  "jm_seedmap.farm.mode_farm": "фарм",
+  "jm_seedmap.farm.mode.tip": "«Ближайшая» — одна метка-цель. «Фарм» — цель на ближайшей непосещённой; дошёл — цель сама переходит к следующей такого же типа, пока не выключишь.",
   "jm_seedmap.farm.stop": "Стоп: %s (пройдено %s)",
   "jm_seedmap.search.find_biome": "Найти ближайший и поставить цель",
   "jm_seedmap.search.highlight_on": "Подсветка: ✔",
@@ -353,5 +353,6 @@
   "jm_seedmap.hud.empty_no_seed": "сид сервера не задан (/seedmap seed)",
   "jm_seedmap.hud.empty_loading": "считается…",
   "jm_seedmap.hud.empty_off": "слой структур выключен (Y)",
-  "jm_seedmap.farm.hud_on": "Включил список «Структуры рядом» на экране — там цель и стрелка. Выключить: /seedmap hud off"
+  "jm_seedmap.hud.farm": "Фарм: %s · пройдено %s",
+  "jm_seedmap.hud.farm_searching": "ищу следующие…"
 }

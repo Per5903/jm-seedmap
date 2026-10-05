@@ -876,6 +876,11 @@ final class SelfTest {
 		Thread.sleep(1_000L);
 		var first = seedMap.world().target();
 		SeedMapClient.LOGGER.info("SELFTEST farm: target {}, pins {}", first == null ? null : first.key(), seedMap.pins().size());
+		boolean hud = SeedMapConfig.get().hudEnabled;
+		SeedMapConfig.get().hudEnabled = false;
+		Thread.sleep(1_500L);
+		screenshot(mc, "seedmap-hud-farm.png");
+		SeedMapConfig.get().hudEnabled = hud;
 		if (first == null) {
 			return;
 		}

@@ -20,6 +20,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
+import ru.per.jmseedmap.core.FarmMode;
 import ru.per.jmseedmap.core.SeedMap;
 import ru.per.jmseedmap.core.StructureDetails;
 import ru.per.jmseedmap.core.StructureStyles;
@@ -182,8 +183,8 @@ public final class SearchScreen extends OptionsSubScreen {
 		var farm = seedMap.farm;
 		list.addSmall(
 			CycleButton.<Integer>builder(v -> v == 0 ? Component.translatable("jm_seedmap.farm.mode_nearest")
-					: Component.translatable("jm_seedmap.farm.mode_farm", v), farmCount)
-				.withValues(List.of(0, 1, 3, 5))
+					: Component.translatable("jm_seedmap.farm.mode_farm"), farmCount)
+				.withValues(List.of(0, FarmMode.DEFAULT_PINS))
 				.withTooltip(v -> Tooltip.create(Component.translatable("jm_seedmap.farm.mode.tip")))
 				.create(Component.translatable("jm_seedmap.farm.mode"), (b, v) -> farmCount = v),
 			farm.active()
