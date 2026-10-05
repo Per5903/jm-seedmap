@@ -310,6 +310,54 @@ public final class StructureIndex {
 		return out;
 	}
 
+	/** Like {@link #query}, but every type that has been computed, shown on the map or not. */
+	public List<FoundStructure> queryAll(ResourceKey<Level> dimension, double minX, double minZ, double maxX, double maxZ) {
+		GenContext ctx = contexts.get(dimension).context();
+		if (ctx == null) {
+			return List.of();
+		}
+		List<FoundStructure> out = new ArrayList<>();
+		for (Holder<StructureSet> set : ctx.structureState().possibleStructureSets()) {
+			if (set.unwrapKey().isEmpty()) {
+				continue;
+			}
+			Identifier setId = set.unwrapKey().get().identifier();
+			for (int tx = tile(minX); tx <= tile(maxX); tx++) {
+				for (int tz = tile(minZ); tz <= tile(maxZ); tz++) {
+					List<FoundStructure> tileResults = results.get(new TileKey(ctx.id(), setId, tx, tz));
+					if (tileResults == null) {
+						continue;
+					}
+					for (FoundStructure s : tileResults) {
+						if (s.pos().getX() >= minX && s.pos().getX() <= maxX && s.pos().getZ() >= minZ && s.pos().getZ() <= maxZ) {
+							out.add(s);
+						}
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	/** Structure ids (and variants such as the End city with a ship) the dimension's generator can place; empty if unknown. */
+	public java.util.Set<String> possibleStructures(ResourceKey<Level> dimension) {
+		GenContext ctx = context(dimension);
+		java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+		if (ctx == null) {
+			return ids;
+		}
+		for (Holder<StructureSet> set : ctx.structureState().possibleStructureSets()) {
+			for (StructureSet.StructureSelectionEntry entry : set.value().structures()) {
+				entry.structure().unwrapKey().ifPresent(k -> {
+					String id = k.identifier().toString();
+					ids.add(id);
+					ids.addAll(StructureStyles.variants(id));
+				});
+			}
+		}
+		return ids;
+	}
+
 	/**
 	 * Searches outward from (x, z) ring by ring for the closest structure accepted by {@code filter},
 	 * up to {@code maxTiles} tiles away. Runs on a worker; computed tiles are cached for the map too.
@@ -317,20 +365,27 @@ public final class StructureIndex {
 	public CompletableFuture<Optional<FoundStructure>> nearest(
 		ResourceKey<Level> dimension, double x, double z, Predicate<String> filter, Predicate<FoundStructure> accept, int maxTiles
 	) {
+		return nearestN(dimension, x, z, filter, accept, 1, maxTiles).thenApply(list -> list.stream().findFirst());
+	}
+
+	/** The {@code count} closest accepted structures, nearest first (fewer if there are not that many in range). */
+	public CompletableFuture<List<FoundStructure>> nearestN(
+		ResourceKey<Level> dimension, double x, double z, Predicate<String> filter, Predicate<FoundStructure> accept, int count, int maxTiles
+	) {
 		return CompletableFuture.supplyAsync(() -> {
 			GenContext ctx = awaitContext(dimension);
 			if (ctx == null) {
-				return Optional.empty();
+				return List.<FoundStructure>of();
 			}
 			loadCacheNow(ctx);
 			List<Holder<StructureSet>> sets = setsMatching(ctx, filter);
 			if (sets.isEmpty()) {
-				return Optional.empty();
+				return List.<FoundStructure>of();
 			}
 			int cx = tile(x);
 			int cz = tile(z);
-			FoundStructure best = null;
-			double bestDist = Double.MAX_VALUE;
+			List<FoundStructure> best = new ArrayList<>();
+			Comparator<FoundStructure> byDistance = Comparator.comparingDouble(s -> s.distanceSqr(x, z));
 			for (int r = 0; r <= maxTiles; r++) {
 				for (int tx = cx - r; tx <= cx + r; tx++) {
 					for (int tz = cz - r; tz <= cz + r; tz++) {
@@ -344,23 +399,30 @@ public final class StructureIndex {
 								found = compute(ctx, set, key);
 							}
 							for (FoundStructure s : found) {
-								double d = s.distanceSqr(x, z);
-								if (d < bestDist && filter.test(s.displayId()) && accept.test(s)) {
-									best = s;
-									bestDist = d;
+								if (filter.test(s.displayId()) && accept.test(s)) {
+									best.add(s);
 								}
 							}
 						}
 					}
 				}
+				best.sort(byDistance);
+				if (best.size() > count) {
+					best.subList(count, best.size()).clear();
+				}
 				// Everything in later rings is at least r tiles away.
 				double reach = (double) r * StructureFinder.TILE_BLOCKS;
-				if (best != null && bestDist <= reach * reach) {
+				if (best.size() == count && best.get(count - 1).distanceSqr(x, z) <= reach * reach) {
 					break;
 				}
 			}
-			return Optional.ofNullable(best);
+			return List.copyOf(best);
 		}, search);
+	}
+
+	/** For the biome layer's disk cache: runs on the cache thread. */
+	void executeIo(Runnable task) {
+		io.execute(task);
 	}
 
 	/**

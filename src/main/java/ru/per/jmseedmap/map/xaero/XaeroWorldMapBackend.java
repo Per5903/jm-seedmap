@@ -371,11 +371,12 @@ public final class XaeroWorldMapBackend implements MapBackend {
 						}
 						long mask = BiomeTextures.FULL_MASK;
 						if (config.biomesOnlyUnexplored) {
+							// (Highlighted biomes are drawn everywhere; the mask only limits the rest.)
 							int x = tx;
 							int z = tz;
 							mask = context.masks.computeIfAbsent(((long) tx << 32) ^ (tz & 0xFFFFFFFFL), k -> new long[]{unexploredMask(processor, x, z)})[0];
 						}
-						if (mask != 0) {
+						if (mask != 0 || !BiomeLayer.highlighted().isEmpty()) {
 							list.add(new BiomeElement(tx * 512.0, tz * 512.0, context.textures.texture(tile, mask, config.biomeOpacity), tile.size(), null));
 						}
 						if (tile.tileX() == Math.floorDiv((int) Math.floor(info.mouseX), 512) && tile.tileZ() == Math.floorDiv((int) Math.floor(info.mouseZ), 512)) {
@@ -800,6 +801,23 @@ public final class XaeroWorldMapBackend implements MapBackend {
 			options.add(new RightClickOption(getMenuName(element), options.size(), target) {
 				@Override
 				public void onAction(Screen screen) {
+				}
+			});
+			// What is inside, if already known (otherwise it starts computing for the details screen).
+			var details = seedMap.details.get(element);
+			if (details != null) {
+				for (var line : details.lines().subList(0, Math.min(details.lines().size(), 4))) {
+					options.add(new RightClickOption(line.getString(), Style.EMPTY.withColor(ChatFormatting.AQUA), options.size(), target) {
+						@Override
+						public void onAction(Screen screen) {
+						}
+					});
+				}
+			}
+			options.add(new RightClickOption(I18n.get("jm_seedmap.menu.details"), options.size(), target) {
+				@Override
+				public void onAction(Screen screen) {
+					Minecraft.getInstance().gui.setScreen(new ru.per.jmseedmap.ui.StructureInfoScreen(screen, element));
 				}
 			});
 			String coords = String.format("X: %d, Y: %d, Z: %d", element.pos().getX(), element.pos().getY(), element.pos().getZ());

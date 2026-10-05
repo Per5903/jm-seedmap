@@ -28,7 +28,9 @@ public final class StructureStyles {
 	/** Structures that belong together in the settings screen and the "nearest" search. */
 	public record Group(String key, List<String> ids) {
 		public String displayName() {
-			return I18n.get("jm_seedmap.group." + key);
+			String translation = "jm_seedmap.group." + key;
+			// Data pack and mod structures have no group name of their own.
+			return net.minecraft.locale.Language.getInstance().has(translation) ? I18n.get(translation) : StructureStyles.displayName(ids.get(0));
 		}
 
 		public String iconId() {
@@ -138,13 +140,36 @@ public final class StructureStyles {
 		return GROUPS;
 	}
 
+	/**
+	 * Groups for these structure ids: the known groups that contain any of them, then one group per id that no
+	 * known group covers (data pack and mod structures), sorted by name.
+	 */
+	public static List<Group> groupsFor(java.util.Collection<String> ids) {
+		List<Group> out = new ArrayList<>();
+		for (Group group : GROUPS) {
+			if (group.ids().stream().anyMatch(ids::contains)) {
+				out.add(group);
+			}
+		}
+		List<Group> extra = new ArrayList<>();
+		for (String id : ids) {
+			if (GROUPS.stream().noneMatch(g -> g.contains(id))) {
+				extra.add(new Group(id, List.of(id)));
+			}
+		}
+		extra.sort(java.util.Comparator.comparing(Group::displayName));
+		out.addAll(extra);
+		return out;
+	}
+
 	public static Group group(String key) {
 		for (Group group : GROUPS) {
 			if (group.key().equals(key)) {
 				return group;
 			}
 		}
-		return null;
+		// A single data pack / mod structure, keyed by its id.
+		return key.contains(":") ? new Group(key, List.of(key)) : null;
 	}
 
 	public static Group groupOf(String structureId) {

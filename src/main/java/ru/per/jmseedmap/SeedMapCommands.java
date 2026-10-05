@@ -123,7 +123,70 @@ public final class SeedMapCommands {
 				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = true, "jm_seedmap.cmd.slime_on")))
 				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showSlimeChunks = false, "jm_seedmap.cmd.slime_off")))
 				.then(literal("here").executes(SeedMapCommands::slimeHere)))
+			.then(literal("profile")
+				.executes(SeedMapCommands::profiles)
+				.then(literal("list").executes(SeedMapCommands::profiles))
+				.then(literal("use")
+					.then(argument("name", StringArgumentType.word())
+						.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(ru.per.jmseedmap.core.SeedProfiles.names(
+							ru.per.jmseedmap.core.SeedProfiles.address()), builder))
+						.executes(ctx -> {
+							String name = StringArgumentType.getString(ctx, "name");
+							ru.per.jmseedmap.core.SeedProfiles.use(name);
+							ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.profile.used", name));
+							return 1;
+						})))
+				.then(literal("new")
+					.executes(ctx -> newProfile(ctx, null))
+					.then(argument("name", StringArgumentType.word()).executes(ctx -> newProfile(ctx, StringArgumentType.getString(ctx, "name")))))
+				.then(literal("delete")
+					.then(argument("name", StringArgumentType.word())
+						.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(ru.per.jmseedmap.core.SeedProfiles.names(
+							ru.per.jmseedmap.core.SeedProfiles.address()), builder))
+						.executes(ctx -> {
+							String name = StringArgumentType.getString(ctx, "name");
+							boolean ok = ru.per.jmseedmap.core.SeedProfiles.delete(name);
+							ctx.getSource().sendFeedback(Component.translatable(ok ? "jm_seedmap.profile.deleted" : "jm_seedmap.profile.not_deleted", name));
+							return ok ? 1 : 0;
+						}))))
+			.then(literal("hud")
+				.executes(ctx -> {
+					SeedMap.get().toggleHud();
+					return 1;
+				})
+				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.hudEnabled = true, "jm_seedmap.cmd.hud_on")))
+				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.hudEnabled = false, "jm_seedmap.cmd.hud_off"))))
+			.then(literal("nearby").executes(ctx -> {
+				Minecraft mc = ctx.getSource().getClient();
+				mc.schedule(() -> mc.gui.setScreen(ru.per.jmseedmap.ui.SearchScreen.nearby(null)));
+				return 1;
+			}))
+			.then(literal("farm")
+				.then(literal("stop").executes(ctx -> {
+					SeedMap.get().farm.stop(true);
+					return 1;
+				}))
+				.then(argument("type", StringArgumentType.word()).suggests(groups)
+					.executes(ctx -> farm(ctx, 3))
+					.then(argument("count", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 10))
+						.executes(ctx -> farm(ctx, com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "count"))))))
 			.then(literal("biomes")
+				.then(literal("highlight")
+					.then(argument("biome", IdentifierArgument.id()).suggests(biomes).executes(ctx -> {
+						var id = ctx.getArgument("biome", net.minecraft.resources.Identifier.class);
+						boolean on = !ru.per.jmseedmap.core.BiomeLayer.highlighted().contains(id);
+						ru.per.jmseedmap.core.BiomeLayer.setHighlighted(id, on);
+						SeedMapConfig.get().showBiomes |= on;
+						SeedMapConfig.save();
+						ctx.getSource().sendFeedback(Component.translatable(on ? "jm_seedmap.cmd.highlight_on" : "jm_seedmap.cmd.highlight_off",
+							ru.per.jmseedmap.ui.SearchScreen.biomeNameOf(id)));
+						return 1;
+					})))
+				.then(literal("clear").executes(ctx -> {
+					ru.per.jmseedmap.core.BiomeLayer.clearHighlight();
+					ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.highlight_cleared"));
+					return 1;
+				}))
 				.then(literal("on").executes(ctx -> toggle(ctx, c -> c.showBiomes = true, "jm_seedmap.cmd.biomes_on")))
 				.then(literal("off").executes(ctx -> toggle(ctx, c -> c.showBiomes = false, "jm_seedmap.cmd.biomes_off"))))
 			.then(literal("datapacks").executes(SeedMapCommands::datapacks))
@@ -167,6 +230,43 @@ public final class SeedMapCommands {
 				ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.reloaded"));
 				return 1;
 			})));
+	}
+
+	private static int farm(CommandContext<FabricClientCommandSource> ctx, int count) {
+		String key = StringArgumentType.getString(ctx, "type");
+		StructureStyles.Group group = StructureStyles.group(key);
+		if (group == null) {
+			ctx.getSource().sendError(Component.translatable("jm_seedmap.cmd.unknown_type", key));
+			return 0;
+		}
+		SeedMap.get().farm.start(group, count);
+		return 1;
+	}
+
+	private static int newProfile(CommandContext<FabricClientCommandSource> ctx, String name) {
+		if (ctx.getSource().getClient().getSingleplayerServer() != null) {
+			ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.cmd.sp_auto"));
+			return 0;
+		}
+		String created = ru.per.jmseedmap.core.SeedProfiles.create(name);
+		ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.profile.created", created)
+			.withStyle(style -> style.withClickEvent(new ClickEvent.SuggestCommand("/seedmap seed "))));
+		return 1;
+	}
+
+	private static int profiles(CommandContext<FabricClientCommandSource> ctx) {
+		String address = ru.per.jmseedmap.core.SeedProfiles.address();
+		String active = ru.per.jmseedmap.core.SeedProfiles.active(address);
+		ctx.getSource().sendFeedback(Component.translatable("jm_seedmap.profile.list", address).withStyle(ChatFormatting.GOLD));
+		for (String name : ru.per.jmseedmap.core.SeedProfiles.names(address)) {
+			Long seed = SeedMapConfig.get().seeds.get(ru.per.jmseedmap.core.SeedProfiles.key(address, name));
+			MutableComponent line = Component.literal((name.equals(active) ? "▶ " : "  ") + name + ": ")
+				.append(seed == null ? Component.translatable("jm_seedmap.profile.no_seed") : Component.literal(seed.toString()));
+			line.withStyle(style -> style.withColor(name.equals(active) ? ChatFormatting.GREEN : ChatFormatting.WHITE)
+				.withClickEvent(new ClickEvent.RunCommand("/seedmap profile use " + name)));
+			ctx.getSource().sendFeedback(line);
+		}
+		return 1;
 	}
 
 	private static int perf(CommandContext<FabricClientCommandSource> ctx) {

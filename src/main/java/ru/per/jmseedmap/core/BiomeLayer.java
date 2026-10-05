@@ -64,6 +64,14 @@ public final class BiomeLayer {
 	private final Set<Key> pending = ConcurrentHashMap.newKeySet();
 	private final AtomicInteger version = new AtomicInteger();
 	private volatile boolean errorLogged;
+	/** Disk cache: compact encoded tiles of the contexts in use, read from and written to one file per context. */
+	private final Map<Key, byte[]> stored = new ConcurrentHashMap<>();
+	private final Set<String> storeLoaded = ConcurrentHashMap.newKeySet();
+	private final Set<String> storeDirty = ConcurrentHashMap.newKeySet();
+	private final java.nio.file.Path cacheDir = Minecraft.getInstance().gameDirectory.toPath().resolve("jm_seedmap").resolve("cache").resolve("biomes");
+	private long lastSave = net.minecraft.util.Util.getMillis();
+	private static final int MAX_STORED = 30_000;
+	private static final int FORMAT = 1;
 
 	BiomeLayer(StructureIndex index) {
 		this.index = index;
@@ -89,11 +97,25 @@ public final class BiomeLayer {
 		if (tile != null) {
 			return tile;
 		}
+		loadStore(ctx.id());
+		byte[] encoded = stored.get(key);
+		if (encoded != null) {
+			tile = decode(tileX, tileZ, cell, encoded);
+			if (tile != null) {
+				tiles.put(key, tile);
+				return tile;
+			}
+		}
 		if (pending.size() < MAX_PENDING && pending.add(key)) {
 			int sampleY = sampleY(ctx, dimension);
 			index.executeBackground(() -> {
 				try {
-					tiles.put(key, compute(ctx, tileX, tileZ, cell, sampleY));
+					Tile computed = compute(ctx, tileX, tileZ, cell, sampleY);
+					tiles.put(key, computed);
+					if (ru.per.jmseedmap.SeedMapConfig.get().diskCache && stored.size() < MAX_STORED) {
+						stored.put(key, encode(computed));
+						storeDirty.add(ctx.id());
+					}
 					version.incrementAndGet();
 				} catch (Throwable t) {
 					if (!errorLogged) {
@@ -166,9 +188,202 @@ public final class BiomeLayer {
 	}
 
 	public void reset() {
+		saveDirty();
 		tiles.clear();
+		stored.clear();
+		storeLoaded.clear();
 		version.incrementAndGet();
 		errorLogged = false;
+	}
+
+	/** Every few seconds from the client tick: write new tiles now and then. */
+	public void tick() {
+		long now = net.minecraft.util.Util.getMillis();
+		if (now - lastSave > 30_000) {
+			lastSave = now;
+			saveDirty();
+		}
+	}
+
+	// ---- disk cache ----
+
+	private void loadStore(String contextId) {
+		if (!ru.per.jmseedmap.SeedMapConfig.get().diskCache || !storeLoaded.add(contextId)) {
+			return;
+		}
+		index.executeIo(() -> {
+			java.nio.file.Path file = cacheFile(contextId);
+			if (!java.nio.file.Files.isRegularFile(file)) {
+				return;
+			}
+			int read = 0;
+			try (var in = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.util.zip.GZIPInputStream(java.nio.file.Files.newInputStream(file))))) {
+				if (in.readInt() != FORMAT || !in.readUTF().equals(net.minecraft.SharedConstants.getCurrentVersion().name()) || !in.readUTF().equals(contextId)) {
+					return;
+				}
+				int count = in.readInt();
+				for (int i = 0; i < count; i++) {
+					Key key = new Key(contextId, in.readInt(), in.readInt(), in.readInt());
+					byte[] data = new byte[in.readInt()];
+					in.readFully(data);
+					if (stored.putIfAbsent(key, data) == null) {
+						read++;
+					}
+				}
+			} catch (Exception e) {
+				SeedMapClient.LOGGER.warn("Ignoring broken biome cache {}", file, e);
+			}
+			if (read > 0) {
+				version.incrementAndGet();
+				SeedMapClient.LOGGER.info("Read {} biome tiles from the disk cache", read);
+			}
+		});
+	}
+
+	public void saveDirty() {
+		if (storeDirty.isEmpty()) {
+			return;
+		}
+		List<String> dirty = List.copyOf(storeDirty);
+		storeDirty.clear();
+		for (String contextId : dirty) {
+			Map<Key, byte[]> snapshot = new HashMap<>();
+			stored.forEach((k, v) -> {
+				if (k.contextId().equals(contextId)) {
+					snapshot.put(k, v);
+				}
+			});
+			index.executeIo(() -> write(contextId, snapshot));
+		}
+	}
+
+	private void write(String contextId, Map<Key, byte[]> tiles) {
+		java.nio.file.Path file = cacheFile(contextId);
+		try {
+			java.nio.file.Files.createDirectories(file.getParent());
+			java.nio.file.Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+			try (var out = new java.io.DataOutputStream(new java.io.BufferedOutputStream(new java.util.zip.GZIPOutputStream(java.nio.file.Files.newOutputStream(tmp))))) {
+				out.writeInt(FORMAT);
+				out.writeUTF(net.minecraft.SharedConstants.getCurrentVersion().name());
+				out.writeUTF(contextId);
+				out.writeInt(tiles.size());
+				for (Map.Entry<Key, byte[]> e : tiles.entrySet()) {
+					out.writeInt(e.getKey().tileX());
+					out.writeInt(e.getKey().tileZ());
+					out.writeInt(e.getKey().cell());
+					out.writeInt(e.getValue().length);
+					out.write(e.getValue());
+				}
+			}
+			java.nio.file.Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+		} catch (Exception e) {
+			SeedMapClient.LOGGER.warn("Failed to write biome cache {}", file, e);
+		}
+	}
+
+	private java.nio.file.Path cacheFile(String contextId) {
+		try {
+			byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(contextId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			return cacheDir.resolve(java.util.HexFormat.of().formatHex(hash, 0, 12) + ".bin");
+		} catch (java.security.NoSuchAlgorithmException e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+	/** Palette plus run-length encoded cells: biomes come in big patches, so a tile is a few hundred bytes. */
+	static byte[] encode(Tile tile) {
+		var bytes = new java.io.ByteArrayOutputStream();
+		try (var out = new java.io.DataOutputStream(bytes)) {
+			out.writeShort(tile.palette().length);
+			for (Identifier id : tile.palette()) {
+				out.writeUTF(id.toString());
+			}
+			short[] cells = tile.cells();
+			int i = 0;
+			while (i < cells.length) {
+				int run = 1;
+				while (i + run < cells.length && cells[i + run] == cells[i] && run < 65535) {
+					run++;
+				}
+				out.writeShort(run);
+				out.writeShort(cells[i]);
+				i += run;
+			}
+		} catch (java.io.IOException e) {
+			throw new IllegalStateException(e);
+		}
+		return bytes.toByteArray();
+	}
+
+	static @Nullable Tile decode(int tileX, int tileZ, int cell, byte[] data) {
+		int size = StructureFinder.TILE_BLOCKS / cell;
+		try (var in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(data))) {
+			Identifier[] palette = new Identifier[in.readUnsignedShort()];
+			for (int p = 0; p < palette.length; p++) {
+				palette[p] = Identifier.parse(in.readUTF());
+			}
+			short[] cells = new short[size * size];
+			int i = 0;
+			while (i < cells.length) {
+				int run = in.readUnsignedShort();
+				short value = in.readShort();
+				java.util.Arrays.fill(cells, i, Math.min(cells.length, i + run), value);
+				i += run;
+			}
+			int[] colors = new int[cells.length];
+			int[] paletteColors = new int[palette.length];
+			for (int p = 0; p < palette.length; p++) {
+				paletteColors[p] = 0xFF000000 | color(palette[p]);
+			}
+			for (int c = 0; c < cells.length; c++) {
+				colors[c] = paletteColors[cells[c]];
+			}
+			return new Tile(tileX, tileZ, cell, size, colors, cells, palette);
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	// ---- highlight ----
+
+	private static volatile Set<Identifier> highlighted = Set.of();
+	private static volatile int highlightVersion;
+
+	/** Biomes picked in the search to stand out on the map (seedmap style); empty = normal coloring. */
+	public static Set<Identifier> highlighted() {
+		return highlighted;
+	}
+
+	public static int highlightVersion() {
+		return highlightVersion;
+	}
+
+	public static void loadHighlight() {
+		Set<Identifier> set = new java.util.HashSet<>();
+		for (String id : ru.per.jmseedmap.SeedMapConfig.get().highlightedBiomes) {
+			Identifier parsed = Identifier.tryParse(id);
+			if (parsed != null) {
+				set.add(parsed);
+			}
+		}
+		highlighted = Set.copyOf(set);
+		highlightVersion++;
+	}
+
+	public static void setHighlighted(Identifier biome, boolean on) {
+		List<String> list = ru.per.jmseedmap.SeedMapConfig.get().highlightedBiomes;
+		list.remove(biome.toString());
+		if (on) {
+			list.add(biome.toString());
+		}
+		ru.per.jmseedmap.SeedMapConfig.save();
+		loadHighlight();
+	}
+
+	public static void clearHighlight() {
+		ru.per.jmseedmap.SeedMapConfig.get().highlightedBiomes.clear();
+		ru.per.jmseedmap.SeedMapConfig.save();
+		loadHighlight();
 	}
 
 	// ---- colors ----

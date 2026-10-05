@@ -102,6 +102,19 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 				.withValues(OPACITIES.contains(c.biomeOpacity) ? OPACITIES
 					: java.util.stream.Stream.concat(OPACITIES.stream(), java.util.stream.Stream.of(c.biomeOpacity)).sorted().toList())
 				.create(Component.translatable("jm_seedmap.opt.biome_opacity"), (b, v) -> c.biomeOpacity = v));
+		list.addHeader(Component.translatable("jm_seedmap.screen.hud"));
+		list.addSmall(
+			withTip(toggle("jm_seedmap.opt.hud", c.hudEnabled, v -> c.hudEnabled = v), "jm_seedmap.opt.hud.tip"),
+			CycleButton.<SeedMapConfig.HudCorner>builder(v -> Component.translatable("jm_seedmap.hud.corner." + v.name().toLowerCase(Locale.ROOT)), c.hudCorner)
+				.withValues(SeedMapConfig.HudCorner.values())
+				.create(Component.translatable("jm_seedmap.opt.hud_corner"), (b, v) -> c.hudCorner = v));
+		list.addSmall(
+			CycleButton.<Integer>builder(v -> Component.literal(v + ""), c.hudCount)
+				.withValues(withValue(List.of(3, 5, 7, 10), c.hudCount))
+				.create(Component.translatable("jm_seedmap.opt.hud_count"), (b, v) -> c.hudCount = v),
+			CycleButton.<Integer>builder(v -> Component.literal(v + ""), c.hudRadius)
+				.withValues(withValue(List.of(300, 500, 1000, 2000, 3000), c.hudRadius))
+				.create(Component.translatable("jm_seedmap.opt.hud_radius"), (b, v) -> c.hudRadius = v));
 		list.addHeader(Component.translatable("jm_seedmap.screen.visited"));
 		list.addSmall(
 			CycleButton.<SeedMapConfig.VisitedMode>builder(
@@ -110,6 +123,11 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 				.withTooltip(v -> Tooltip.create(Component.translatable("jm_seedmap.opt.visited.tip")))
 				.create(Component.translatable("jm_seedmap.opt.visited"), (b, v) -> c.visitedMode = v),
 			radius("jm_seedmap.opt.visit_radius", c.visitRadius, v -> c.visitRadius = v));
+		list.addSmall(
+			withTip(CycleButton.<Integer>builder(v -> v == 0 ? Component.translatable("jm_seedmap.opt.off") : Component.literal(v + ""), c.visitHeight)
+				.withValues(withValue(List.of(0, 16, 24, 32, 48, 64), c.visitHeight))
+				.create(Component.translatable("jm_seedmap.opt.visit_height"), (b, v) -> c.visitHeight = v), "jm_seedmap.opt.visit_height.tip"),
+			null);
 
 		list.addHeader(Component.translatable("jm_seedmap.screen.performance"));
 		list.addSmall(
@@ -124,6 +142,10 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			b.setMessage(Component.translatable("jm_seedmap.screen.cache_clear", 0));
 			b.active = false;
 		}).build(), null);
+	}
+
+	private static List<Integer> withValue(List<Integer> values, int value) {
+		return values.contains(value) ? values : java.util.stream.Stream.concat(values.stream(), java.util.stream.Stream.of(value)).sorted().toList();
 	}
 
 	private static Component perfLabel(SeedMapConfig.Performance p) {
@@ -145,11 +167,18 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			Button.builder(Component.translatable("jm_seedmap.screen.show_all"), b -> setAll(true)).build(),
 			Button.builder(Component.translatable("jm_seedmap.screen.hide_all"), b -> setAll(false)).build());
 		List<Button> toggles = new ArrayList<>();
-		for (StructureStyles.Group group : StructureStyles.groups()) {
-			toggles.add(new IconButton(StructureStyles.icon(group.iconId()), 150, groupLabel(group), b -> {
-				group.setEnabled(!group.isEnabled());
-				b.setMessage(groupLabel(group));
-			}));
+		// All known types, plus data pack / mod structures of the current dimension.
+		List<StructureStyles.Group> groups = new ArrayList<>(StructureStyles.groups());
+		for (StructureStyles.Group g : SearchScreen.groupsHere()) {
+			if (groups.stream().noneMatch(k -> k.key().equals(g.key()))) {
+				groups.add(g);
+			}
+		}
+		for (StructureStyles.Group group : groups) {
+			ToggleIconButton toggle = new ToggleIconButton(on -> StructureStyles.icon(group.iconId(), !on), 150,
+				Component.literal(group.displayName()), group::isEnabled, b -> group.setEnabled(!group.isEnabled()));
+			toggle.setTooltip(Tooltip.create(Component.literal(group.displayName())));
+			toggles.add(toggle);
 		}
 		for (int i = 0; i < toggles.size(); i += 2) {
 			list.addSmall(toggles.get(i), i + 1 < toggles.size() ? toggles.get(i + 1) : null);
@@ -158,6 +187,9 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 
 	private void setAll(boolean enabled) {
 		for (StructureStyles.Group group : StructureStyles.groups()) {
+			group.setEnabled(enabled);
+		}
+		for (StructureStyles.Group group : SearchScreen.groupsHere()) {
 			group.setEnabled(enabled);
 		}
 		rebuildWidgets();
@@ -177,7 +209,7 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			radius("jm_seedmap.opt.arrival_radius", c.arrivalRadius, v -> c.arrivalRadius = v));
 		list.addSmall(
 			Button.builder(Component.translatable("jm_seedmap.screen.pins", SeedMap.get().pins().size()), b -> mc.gui.setScreen(new PinsScreen(this))).build(),
-			null);
+			Button.builder(Component.translatable("jm_seedmap.screen.nearby"), b -> mc.gui.setScreen(SearchScreen.nearby(this))).build());
 		list.addSmall(
 			Button.builder(Component.translatable("jm_seedmap.screen.search"), b -> mc.gui.setScreen(new SearchScreen(this))).build(),
 			oneShot("jm_seedmap.screen.clear_target", () -> SeedMap.get().clearTarget()));
@@ -198,7 +230,20 @@ public final class SeedMapConfigScreen extends OptionsSubScreen {
 			list.addHeader(Component.translatable("jm_seedmap.screen.seed_sp"));
 		} else if (mc.level != null) {
 			String key = GenContextProvider.serverKey();
-			list.addHeader(Component.translatable("jm_seedmap.screen.seed", key));
+			String address = ru.per.jmseedmap.core.SeedProfiles.address();
+			list.addHeader(Component.translatable("jm_seedmap.screen.seed", address));
+			list.addSmall(
+				CycleButton.<String>builder(Component::literal, ru.per.jmseedmap.core.SeedProfiles.active(address))
+					.withValues(ru.per.jmseedmap.core.SeedProfiles.names(address))
+					.withTooltip(v -> Tooltip.create(Component.translatable("jm_seedmap.opt.profile.tip")))
+					.create(Component.translatable("jm_seedmap.opt.profile"), (b, v) -> {
+						ru.per.jmseedmap.core.SeedProfiles.use(v);
+						rebuildWidgets();
+					}),
+				Button.builder(Component.translatable("jm_seedmap.screen.profile_new"), b -> {
+					ru.per.jmseedmap.core.SeedProfiles.create(null);
+					rebuildWidgets();
+				}).build());
 			seedBox = new EditBox(mc.font, 0, 0, 150, 20, Component.translatable("jm_seedmap.screen.seed_hint"));
 			seedBox.setMaxLength(64);
 			Long seed = c.seeds.get(key);

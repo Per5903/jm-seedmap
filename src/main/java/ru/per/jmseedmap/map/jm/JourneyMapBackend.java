@@ -48,6 +48,7 @@ public final class JourneyMapBackend implements MapBackend {
 	private final Map<String, ImageOverlay> biomeShown = new HashMap<>();
 	private final Map<String, BiomeLayer.Tile> biomeTiles = new HashMap<>();
 	private int biomeOpacity = -1;
+	private int biomeHighlight = -1;
 	private int ticks;
 	private int shownRevision = -1;
 	private int shownPins = -1;
@@ -164,6 +165,11 @@ public final class JourneyMapBackend implements MapBackend {
 		public void onOverlayMenuPopup(UIState mapState, Point2D.Double mousePosition, BlockPos blockPosition, ModPopupMenu menu) {
 			SeedMap seedMap = SeedMap.get();
 			String name = StructureStyles.displayName(structure.displayId());
+			menu.addMenuItem(I18n.get("jm_seedmap.menu.details"), clicked -> {
+				Minecraft mc = Minecraft.getInstance();
+				mc.gui.setScreen(new ru.per.jmseedmap.ui.StructureInfoScreen(mc.gui.screen(), structure));
+			});
+			seedMap.details.request(structure);
 			boolean pinned = seedMap.isPinned(structure);
 			menu.addMenuItem(I18n.get(pinned ? "jm_seedmap.menu.unpin" : "jm_seedmap.menu.pin", name),
 				clicked -> seedMap.setPinned(structure, !pinned));
@@ -301,8 +307,9 @@ public final class JourneyMapBackend implements MapBackend {
 				}
 			}
 		}
-		boolean opacityChanged = biomeOpacity != config.biomeOpacity;
+		boolean opacityChanged = biomeOpacity != config.biomeOpacity || biomeHighlight != BiomeLayer.highlightVersion();
 		biomeOpacity = config.biomeOpacity;
+		biomeHighlight = BiomeLayer.highlightVersion();
 		Iterator<Map.Entry<String, ImageOverlay>> it = biomeShown.entrySet().iterator();
 		while (it.hasNext()) {
 			Map.Entry<String, ImageOverlay> entry = it.next();
@@ -323,11 +330,11 @@ public final class JourneyMapBackend implements MapBackend {
 
 	private void showBiomeTile(String key, ResourceKey<Level> dimension, BiomeLayer.Tile tile, int opacity) {
 		int size = tile.size();
-		int alpha = Math.clamp(opacity * 255 / 100, 0, 255) << 24;
+		int[] colors = ru.per.jmseedmap.map.BiomeTextures.colors(tile, ru.per.jmseedmap.map.BiomeTextures.FULL_MASK, opacity);
 		NativeImage image = new NativeImage(size, size, false);
 		for (int z = 0; z < size; z++) {
 			for (int x = 0; x < size; x++) {
-				image.setPixel(x, z, alpha | (tile.colors()[z * size + x] & 0xFFFFFF));
+				image.setPixel(x, z, colors[z * size + x]);
 			}
 		}
 		int tx = tile.tileX() * 512;

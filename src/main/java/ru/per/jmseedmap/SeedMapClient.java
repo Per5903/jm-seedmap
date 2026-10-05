@@ -47,6 +47,13 @@ public final class SeedMapClient implements ClientModInitializer {
 			new KeyMapping("key.jm_seedmap.nearest", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_PERIOD, category));
 		KeyMapping settingsKey = KeyMappingHelper.registerKeyMapping(
 			new KeyMapping("key.jm_seedmap.settings", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_COMMA, category));
+		// Unbound by default: every convenient letter is already taken in big modpacks.
+		KeyMapping hudKey = KeyMappingHelper.registerKeyMapping(
+			new KeyMapping("key.jm_seedmap.hud", InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), category));
+		KeyMapping nearbyKey = KeyMappingHelper.registerKeyMapping(
+			new KeyMapping("key.jm_seedmap.nearby_list", InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), category));
+		net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.addLast(
+			Identifier.fromNamespaceAndPath(MOD_ID, "nearby"), seedMap.hud);
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, buildContext) -> SeedMapCommands.register(dispatcher));
 
@@ -59,6 +66,12 @@ public final class SeedMapClient implements ClientModInitializer {
 			}
 			while (settingsKey.consumeClick()) {
 				client.gui.setScreen(new SeedMapConfigScreen(null));
+			}
+			while (hudKey.consumeClick()) {
+				seedMap.toggleHud();
+			}
+			while (nearbyKey.consumeClick()) {
+				client.gui.setScreen(SearchScreen.nearby(null));
 			}
 			seedMap.tick(client);
 			SelfTest.tick(client);

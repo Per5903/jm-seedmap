@@ -26,6 +26,8 @@ public final class SeedMapConfig {
 	/** How much CPU and memory the mod may use; AUTO picks by core count and heap size. */
 	public enum Performance { AUTO, LOW, NORMAL, HIGH }
 
+	public enum HudCorner { TOP_LEFT, TOP_RIGHT, MIDDLE_LEFT, MIDDLE_RIGHT }
+
 	/** The structure layer as a whole (toggle key). */
 	public boolean enabled = true;
 	public boolean showOnMinimap = true;
@@ -40,23 +42,36 @@ public final class SeedMapConfig {
 	public boolean showBiomes = false;
 	/** Xaero's World Map: color only the parts the player has not explored yet. */
 	public boolean biomesOnlyUnexplored = true;
+	/** Biomes highlighted on the biome layer (ids). */
+	public java.util.List<String> highlightedBiomes = new java.util.ArrayList<>();
 	/** Biome layer opacity, percent. */
 	public int biomeOpacity = 60;
 	public Performance performance = Performance.AUTO;
 	/** Keep computed structure tiles on disk so a revisited world fills in instantly. */
 	public boolean diskCache = true;
+	/** On-screen list of the nearest shown structures (no map needed). */
+	public boolean hudEnabled = false;
+	public int hudCount = 5;
+	public int hudRadius = 1000;
+	public HudCorner hudCorner = HudCorner.MIDDLE_RIGHT;
 	/** Take the seed from SeedCrackerX as soon as it finds one. */
 	public boolean seedCrackerAuto = true;
 	/** Re-check the seed in the background now and then (otherwise only on demand). */
 	public boolean seedCheckAuto = false;
 	/** Horizontal distance from a structure's marker at which it counts as visited. */
 	public int visitRadius = 48;
+	/** ...and at most this far above or below its marker (0 = height does not matter). */
+	public int visitHeight = 32;
 	/** Remove the navigation target once the player gets this close (0 = never). */
 	public int arrivalRadius = 24;
 	/** Server address -> seed. */
 	public Map<String, Long> seeds = new LinkedHashMap<>();
 	/** Server address -> world preset id (minecraft:normal, minecraft:large_biomes, minecraft:amplified). */
 	public Map<String, String> presets = new LinkedHashMap<>();
+	/** Server address -> active seed profile (missing = "default"). */
+	public Map<String, String> activeProfiles = new LinkedHashMap<>();
+	/** Profile key -> seed hashes (hex) of the worlds it was used in, to recognize them again. */
+	public Map<String, java.util.List<String>> profileHashes = new LinkedHashMap<>();
 	/** Structure id -> shown on map. Missing entries use the style default. */
 	public Map<String, Boolean> structures = new LinkedHashMap<>();
 
@@ -79,6 +94,7 @@ public final class SeedMapConfig {
 		}
 		instance.fixNulls();
 		ru.per.jmseedmap.core.StructureStyles.filtersChanged();
+		ru.per.jmseedmap.core.BiomeLayer.loadHighlight();
 	}
 
 	public static void save() {
@@ -96,8 +112,15 @@ public final class SeedMapConfig {
 		if (seeds == null) seeds = new LinkedHashMap<>();
 		if (presets == null) presets = new LinkedHashMap<>();
 		if (structures == null) structures = new LinkedHashMap<>();
+		if (activeProfiles == null) activeProfiles = new LinkedHashMap<>();
+		if (profileHashes == null) profileHashes = new LinkedHashMap<>();
 		if (visitedMode == null) visitedMode = VisitedMode.DIM;
 		if (performance == null) performance = Performance.AUTO;
+		if (hudCorner == null) hudCorner = HudCorner.MIDDLE_RIGHT;
+		if (highlightedBiomes == null) highlightedBiomes = new java.util.ArrayList<>();
+		else highlightedBiomes = new java.util.ArrayList<>(highlightedBiomes);
+		hudCount = Math.clamp(hudCount, 1, 12);
+		hudRadius = Math.clamp(hudRadius, 100, 5000);
 		biomeOpacity = Math.clamp(biomeOpacity, 10, 100);
 	}
 }

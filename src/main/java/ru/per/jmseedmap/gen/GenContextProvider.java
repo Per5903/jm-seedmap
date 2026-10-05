@@ -13,7 +13,6 @@ import java.util.stream.Stream;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
@@ -127,11 +126,13 @@ public final class GenContextProvider {
 	/** World folder, seed, enabled data packs and loaded mods: what makes a singleplayer world generate the way it does. */
 	private static String singleplayerKey(IntegratedServer server) {
 		String folder = String.valueOf(server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName());
-		StringBuilder packs = new StringBuilder();
-		server.getPackRepository().getSelectedIds().forEach(id -> packs.append(id).append(';'));
+		// Sorted: the loader lists mods in no particular order, and the key must be the same every launch.
+		java.util.TreeSet<String> parts = new java.util.TreeSet<>();
+		server.getPackRepository().getSelectedIds().forEach(id -> parts.add("pack:" + id));
 		FabricLoader.getInstance().getAllMods().forEach(mod ->
-			packs.append(mod.getMetadata().getId()).append('@').append(mod.getMetadata().getVersion().getFriendlyString()).append(';'));
-		return folder + ":" + server.overworld().getSeed() + ":" + Integer.toHexString(packs.toString().hashCode());
+			parts.add(mod.getMetadata().getId() + "@" + mod.getMetadata().getVersion().getFriendlyString()));
+		String packs = String.join(";", parts);
+		return folder + ":" + server.overworld().getSeed() + ":" + Integer.toHexString(packs.hashCode());
 	}
 
 	public static Optional<GenContext> fromServer(String id, IntegratedServer server, ResourceKey<Level> dimension) {
@@ -284,12 +285,9 @@ public final class GenContextProvider {
 		return null;
 	}
 
+	/** Key the current server's seed, world type and data packs are stored under: its address plus the seed profile. */
 	public static String serverKey() {
-		ServerData data = Minecraft.getInstance().getCurrentServer();
-		if (data == null) {
-			return "unknown";
-		}
-		return data.isRealm() ? "realms:" + data.name : data.ip.toLowerCase(java.util.Locale.ROOT);
+		return ru.per.jmseedmap.core.SeedProfiles.currentKey();
 	}
 
 	public static String preset(String serverKey) {

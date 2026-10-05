@@ -34,6 +34,9 @@ public final class SeedMap {
 
 	public final StructureIndex index = new StructureIndex();
 	public final BiomeLayer biomes = new BiomeLayer(index);
+	public final StructureDetails details = new StructureDetails(index);
+	public final ru.per.jmseedmap.ui.NearbyHud hud = new ru.per.jmseedmap.ui.NearbyHud();
+	public final FarmMode farm = new FarmMode(this);
 	public final SeedCheck seedCheck = new SeedCheck();
 	public final SeedFinder seedFinder = new SeedFinder();
 	/** Tick at which to run a one-off seed check (after a seed was entered or found), or -1. */
@@ -44,6 +47,7 @@ public final class SeedMap {
 	private int revision;
 	private int pinsRevision;
 	private int ticks;
+	private @Nullable Long lastHash;
 
 	public static SeedMap get() {
 		return INSTANCE;
@@ -61,6 +65,12 @@ public final class SeedMap {
 	/** Changes when anything that affects how markers look changes (toggles, visited marks...). */
 	public int revision() {
 		return revision;
+	}
+
+	/** Pins were added or removed outside the usual methods. */
+	public void pinsChanged() {
+		pinsRevision++;
+		revision++;
 	}
 
 	public void invalidateVisuals() {
@@ -107,6 +117,9 @@ public final class SeedMap {
 		}
 		if (ticks % 10 == 0) {
 			trackVisits(mc, player, config);
+			farm.tick(mc);
+			biomes.tick();
+			hud.update(this, mc);
 		}
 		if (checkAt >= 0 && ticks >= checkAt) {
 			checkAt = -1;
@@ -119,6 +132,14 @@ public final class SeedMap {
 		}
 		if (ticks % 100 == 50) {
 			ru.per.jmseedmap.compat.SeedCrackerCompat.tick(this, mc);
+		}
+		if (ticks % 20 == 5 && mc.getSingleplayerServer() == null) {
+			// A proxy moving the player to another world sends that world's seed hash: pick its seed profile.
+			java.util.OptionalLong hash = SeedCheck.serverHashedSeed(mc.level);
+			if (hash.isPresent() && hash.getAsLong() != 0 && (lastHash == null || lastHash != hash.getAsLong())) {
+				lastHash = hash.getAsLong();
+				SeedProfiles.onHash(lastHash);
+			}
 		}
 	}
 
@@ -144,6 +165,7 @@ public final class SeedMap {
 	}
 
 	public void onDisconnect() {
+		farm.stop(false);
 		if (world != null) {
 			world.saveIfDirty();
 		}
@@ -151,10 +173,13 @@ public final class SeedMap {
 		worldKey = null;
 		index.reset();
 		biomes.reset();
+		details.reset();
 		seedCheck.reset();
 		seedFinder.cancel();
 		ru.per.jmseedmap.compat.SeedCrackerCompat.reset();
 		ru.per.jmseedmap.compat.VersionCheck.reset();
+		SeedProfiles.onDisconnect();
+		lastHash = null;
 		checkAt = -1;
 		pinsRevision++;
 		revision++;
@@ -164,6 +189,7 @@ public final class SeedMap {
 		if (world != null) {
 			world.saveIfDirty();
 		}
+		biomes.saveDirty();
 		index.shutdown();
 	}
 
@@ -201,8 +227,10 @@ public final class SeedMap {
 		}
 		double r = config.visitRadius;
 		ResourceKey<Level> dim = mc.level.dimension();
-		for (FoundStructure s : index.query(dim, player.getX() - r, player.getZ() - r, player.getX() + r, player.getZ() + r)) {
-			if (s.distanceSqr(player.getX(), player.getZ()) <= r * r && world.setVisited(s.key(), true)) {
+		// Every computed type, not only the ones shown: a structure found through the search may be hidden on the map.
+		for (FoundStructure s : index.queryAll(dim, player.getX() - r, player.getZ() - r, player.getX() + r, player.getZ() + r)) {
+			if (s.distanceSqr(player.getX(), player.getZ()) <= r * r && closeInHeight(player.getY(), s.pos().getY(), config)
+				&& world.setVisited(s.key(), true)) {
 				revision++;
 				if (config.visitedMode != SeedMapConfig.VisitedMode.SHOW) {
 					player.sendOverlayMessage(Component.translatable("jm_seedmap.msg.visited", StructureStyles.displayName(s.displayId())));
@@ -213,12 +241,25 @@ public final class SeedMap {
 		if (target != null && config.arrivalRadius > 0 && target.dimensionKey().equals(dim)) {
 			double dx = target.x() + 0.5 - player.getX();
 			double dz = target.z() + 0.5 - player.getZ();
-			if (dx * dx + dz * dz <= (double) config.arrivalRadius * config.arrivalRadius) {
+			boolean structure = !target.key().startsWith("biome|") && target.key().contains("@");
+			// An underground structure (ancient city, mineshaft...) is only reached when the player gets down there.
+			if (dx * dx + dz * dz <= (double) config.arrivalRadius * config.arrivalRadius
+				&& (!structure || closeInHeight(player.getY(), target.y(), config))) {
 				world.clearTarget();
+				// Reached a structure target: it counts as visited, so "nearest" goes on to the next one.
+				if (!target.key().startsWith("biome|") && target.key().contains("@")) {
+					world.setVisited(target.key(), true);
+					revision++;
+				}
 				pinsRevision++;
 				player.sendOverlayMessage(Component.translatable("jm_seedmap.msg.arrived", target.name()).withStyle(ChatFormatting.GREEN));
 			}
 		}
+	}
+
+	/** Within the visit height of a structure's marker; 0 in the settings = height does not matter. */
+	private static boolean closeInHeight(double playerY, int structureY, SeedMapConfig config) {
+		return config.visitHeight <= 0 || Math.abs(playerY - structureY) <= config.visitHeight;
 	}
 
 	// ---- pins ----
@@ -245,6 +286,16 @@ public final class SeedMap {
 			return;
 		}
 		world.addPin(pinFor(structure, true));
+		pinsRevision++;
+	}
+
+	/** A target that is not a structure marker, e.g. a stronghold's portal room. */
+	public void setTarget(ResourceKey<Level> dimension, net.minecraft.core.BlockPos pos, String id, String name, int color) {
+		if (world == null) {
+			return;
+		}
+		world.addPin(new WorldData.Pin(id + "|" + dimension.identifier() + "|" + pos.toShortString(), dimension.identifier().toString(),
+			pos.getX(), pos.getY(), pos.getZ(), id, "→ " + name, color, true));
 		pinsRevision++;
 	}
 
@@ -329,7 +380,7 @@ public final class SeedMap {
 		}));
 	}
 
-	private static String direction(double dx, double dz) {
+	public static String direction(double dx, double dz) {
 		// Minecraft: -Z is north, +X is east.
 		double angle = Math.toDegrees(Math.atan2(dx, -dz));
 		String[] names = {"n", "ne", "e", "se", "s", "sw", "w", "nw"};
@@ -441,10 +492,32 @@ public final class SeedMap {
 		}
 	}
 
+	/** The seed profile changed: other seed, other pins and visited marks. */
+	public void onProfileChanged() {
+		farm.stop(false);
+		seedFinder.cancel();
+		ru.per.jmseedmap.compat.SeedCrackerCompat.reset();
+		resetStructures();
+		scheduleSeedCheck();
+		pinsRevision++;
+	}
+
+	public void toggleHud() {
+		SeedMapConfig config = SeedMapConfig.get();
+		config.hudEnabled = !config.hudEnabled;
+		SeedMapConfig.save();
+		Minecraft mc = Minecraft.getInstance();
+		hud.update(this, mc);
+		if (mc.player != null) {
+			mc.player.sendOverlayMessage(Component.translatable(config.hudEnabled ? "jm_seedmap.cmd.hud_on" : "jm_seedmap.cmd.hud_off"));
+		}
+	}
+
 	/** After seed/preset change: recompute everything. */
 	public void resetStructures() {
 		index.reset();
 		biomes.reset();
+		details.reset();
 		seedCheck.reset();
 		revision++;
 	}
